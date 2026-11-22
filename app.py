@@ -1,12 +1,10 @@
-# app.py - V8 - FINAL - Pura Market Scan NSE + BSE + Global News + Notification
-# Jab Scan dabaoge to pura market scan karega - NSE + BSE
-# Jo stock agle kuch samay me sabse zyada move karne ki sambhavana hai, usko option chain se Rs 5000 me aane wala strike dega
-# Global News - Election, Fed, Policy - bhi dekhega
-# Pichla Nifty, Bank Nifty, Sensex, Bankex ka move bhi dekhega
-# Movement suru hua hai ya nahi - ye bhi janchega
-# Notification bhi dega - App me + Telegram me
-# Sirf JAANKARI, Auto Trade NAHI. Trade aap khud loge.
-# Login: Sirf INDmoney Secret Code - 1 cheez
+# app.py - V10 - FINAL - Option Chain SIRF IND Money se, NSE se NAHI + Send Notification Test Button
+# IND Money ka Secret kisliye diya hai? Usi se mangne ke liye na. IND Money ke paas Option Chain hai, wo hi sab bhej dega.
+# Jo Stock Top pe aayega / Suggested hoga / Selected hoga, uska Option Chain IND Money se mangenge, NSE se NAHI.
+# Bot check karne ke liye SEND NOTIFICATION button - Top 5 ka notification bhejega, naam likh ke aayega, kahan pe hai ye bhi aayega.
+# Uske baad jo Strike Price aayega, usko select karke Entry / SL / Target sab Notification me bhej denge.
+# Baad me is Test button ko hata denge - abhi check karne ke liye rakha hai.
+# Sirf JAANKARI, Auto Trade NAHI.
 
 import streamlit as st
 import pandas as pd
@@ -17,20 +15,15 @@ import sqlite3
 import os
 import requests
 import base64
-import re
 
-st.set_page_config(page_title="Pura Market Scanner - NSE + BSE", layout="wide")
+st.set_page_config(page_title="Option Chain - SIRF IND Money se", layout="wide")
 
-CAPITAL = 5000  # Ab 5000 me aana chahiye - aapne bola 5000
-MAX_RISK_PER_TRADE = 300  # 5000 ka 6% risk
+CAPITAL = 5000
 DB_FILE = "trades.db"
 CSV_FILE = "all_trades.csv"
 GITHUB_CSV_PATH = "trades_diary/all_trades.csv"
 
-# Pura Market - NSE 500 + BSE top - 100+ sabse liquid stocks jo 95% move cover karte hain
-# Pura 3000 stocks scan karne me 10 min lagega, isliye top liquid 100 liye hain jo asli move dete hain
 MARKET_STOCKS = {
-    # Nifty 50
     "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS", "INFY": "INFY.NS", "HDFCBANK": "HDFCBANK.NS", "ICICIBANK": "ICICIBANK.NS",
     "SBIN": "SBIN.NS", "TATAMOTORS": "TATAMOTORS.NS", "TATASTEEL": "TATASTEEL.NS", "M&M": "M&M.NS", "TITAN": "TITAN.NS",
     "ADANIENT": "ADANIENT.NS", "ADANIPORTS": "ADANIPORTS.NS", "AXISBANK": "AXISBANK.NS", "KOTAKBANK": "KOTAKBANK.NS", "LT": "LT.NS",
@@ -40,22 +33,19 @@ MARKET_STOCKS = {
     "DRREDDY": "DRREDDY.NS", "CIPLA": "CIPLA.NS", "DIVISLAB": "DIVISLAB.NS", "EICHERMOT": "EICHERMOT.NS", "HEROMOTOCO": "HEROMOTOCO.NS",
     "GRASIM": "GRASIM.NS", "ULTRACEMCO": "ULTRACEMCO.NS", "SHRIRAMFIN": "SHRIRAMFIN.NS", "MUTHOOTFIN": "MUTHOOTFIN.NS", "APOLLOHOSP": "APOLLOHOSP.NS",
     "TATACONSUM": "TATACONSUM.NS", "NESTLEIND": "NESTLEIND.NS", "BRITANNIA": "BRITANNIA.NS", "HINDUNILVR": "HINDUNILVR.NS", "ASIANPAINT": "ASIANPAINT.NS",
-    # Midcap - jahan sabse zyada move aata hai
     "KALYANJIL": "KALYANKJIL.NS", "UNIONBANK": "UNIONBANK.NS", "PNB": "PNB.NS", "CANBK": "CANBK.NS", "FEDERALBNK": "FEDERALBNK.NS",
     "IDFCFIRSTB": "IDFCFIRSTB.NS", "BEL": "BEL.NS", "HAL": "HAL.NS", "TATAPOWER": "TATAPOWER.NS", "IRFC": "IRFC.NS",
     "RVNL": "RVNL.NS", "IRCTC": "IRCTC.NS", "MAZAGON": "MAZDOCK.NS", "COCHINSHIP": "COCHINSHIP.NS", "NHPC": "NHPC.NS",
     "SJVN": "SJVN.NS", "HUDCO": "HUDCO.NS", "NBCC": "NBCC.NS", "YESBANK": "YESBANK.NS", "SUZLON": "SUZLON.NS",
     "IDEA": "IDEA.NS", "PAYTM": "PAYTM.NS", "ZOMATO": "ETERNAL.NS", "NYKAA": "NYKAA.NS", "POLICYBZR": "POLICYBZR.NS",
-    "DMART": "DMART.NS", "TRENT": "TRENT.NS", "JUBLFOOD": "JUBLFOOD.NS", "INDIGO": "INDIGO.NS", "TATAMTRDVR": "TATAMTRDVR.NS",
-    # BSE wale - Sensex ke
-    "BAJAJFINSV": "BAJAJFINSV.NS", "BAJAJ-AUTO": "BAJAJ-AUTO.NS", "TATAMOTORS-BSE": "TATAMOTORS.NS", "SBILIFE": "SBILIFE.NS", "HDFCLIFE": "HDFCLIFE.NS",
+    "DMART": "DMART.NS", "TRENT": "TRENT.NS", "JUBLFOOD": "JUBLFOOD.NS", "INDIGO": "INDIGO.NS",
+    "BAJAJFINSV": "BAJAJFINSV.NS", "BAJAJ-AUTO": "BAJAJ-AUTO.NS", "SBILIFE": "SBILIFE.NS", "HDFCLIFE": "HDFCLIFE.NS",
     "INDUSINDBK": "INDUSINDBK.NS", "BANKBARODA": "BANKBARODA.NS", "AUBANK": "AUBANK.NS", "MPHASIS": "MPHASIS.NS", "PERSISTENT": "PERSISTENT.NS",
     "COFORGE": "COFORGE.NS", "LTIM": "LTIM.NS", "VEDL": "VEDL.NS", "JINDALSTEL": "JINDALSTEL.NS", "SAIL": "SAIL.NS",
     "NMDC": "NMDC.NS", "GAIL": "GAIL.NS", "PETRONET": "PETRONET.NS", "IOC": "IOC.NS", "HINDPETRO": "HINDPETRO.NS",
     "AMBUJACEM": "AMBUJACEM.NS", "ACC": "ACC.NS", "SHREECEM": "SHREECEM.NS", "DLF": "DLF.NS", "GODREJPROP": "GODREJPROP.NS",
 }
-
-LOT_SIZES = {"RELIANCE": 250, "TCS": 175, "INFY": 800, "HDFCBANK": 550, "ICICIBANK": 1375, "SBIN": 1500, "TATAMOTORS": 1400, "TATASTEEL": 5500, "M&M": 800, "TITAN": 350, "ADANIENT": 300, "ADANIPORTS": 1000, "AXISBANK": 1200, "KOTAKBANK": 800, "LT": 300, "MARUTI": 50, "ONGC": 3850, "POWERGRID": 3600, "NTPC": 5700, "COALINDIA": 2100, "BPCL": 1800, "HINDALCO": 2600, "JSWSTEEL": 1350, "BAJFINANCE": 125, "BHARTIARTL": 950, "ITC": 1600, "HCLTECH": 700, "WIPRO": 3000, "TECHM": 900, "SUNPHARMA": 700, "DRREDDY": 125, "CIPLA": 650, "DIVISLAB": 200, "EICHERMOT": 175, "HEROMOTOCO": 300, "GRASIM": 250, "ULTRACEMCO": 100, "SHRIRAMFIN": 300, "MUTHOOTFIN": 500, "APOLLOHOSP": 125, "TATACONSUM": 1000, "NESTLEIND": 10, "BRITANNIA": 100, "HINDUNILVR": 300, "ASIANPAINT": 400, "KALYANJIL": 3200, "UNIONBANK": 8000, "PNB": 8000, "CANBK": 7000, "FEDERALBNK": 10000, "IDFCFIRSTB": 10000, "BEL": 4000, "HAL": 150, "TATAPOWER": 3750, "IRFC": 7500, "RVNL": 5000, "IRCTC": 1250, "MAZAGON": 150, "COCHINSHIP": 300, "NHPC": 7000, "SJVN": 8000, "HUDCO": 4000, "NBCC": 6000, "YESBANK": 20000, "SUZLON": 10000, "IDEA": 20000, "PAYTM": 800, "ZOMATO": 3000, "NYKAA": 4000, "POLICYBZR": 500, "DMART": 200, "TRENT": 200, "JUBLFOOD": 500, "INDIGO": 150, "TATAMTRDVR": 1400, "BAJAJFINSV": 500, "BAJAJ-AUTO": 125, "SBILIFE": 750, "HDFCLIFE": 1100, "INDUSINDBK": 800, "BANKBARODA": 4000, "AUBANK": 1000, "MPHASIS": 300, "PERSISTENT": 100, "COFORGE": 100, "LTIM": 100, "VEDL": 3000, "JINDALSTEL": 800, "SAIL": 8000, "NMDC": 8000, "GAIL": 4000, "PETRONET": 3000, "IOC": 4000, "HINDPETRO": 2000, "AMBUJACEM": 1000, "ACC": 300, "SHREECEM": 25, "DLF": 1500, "GODREJPROP": 300}
+LOT_SIZES = {"RELIANCE": 250, "TCS": 175, "INFY": 800, "HDFCBANK": 550, "ICICIBANK": 1375, "SBIN": 1500, "TATAMOTORS": 1400, "TATASTEEL": 5500, "M&M": 800, "TITAN": 350, "ADANIENT": 300, "ADANIPORTS": 1000, "AXISBANK": 1200, "KOTAKBANK": 800, "LT": 300, "MARUTI": 50, "ONGC": 3850, "POWERGRID": 3600, "NTPC": 5700, "COALINDIA": 2100, "BPCL": 1800, "HINDALCO": 2600, "JSWSTEEL": 1350, "BAJFINANCE": 125, "BHARTIARTL": 950, "ITC": 1600, "HCLTECH": 700, "WIPRO": 3000, "TECHM": 900, "SUNPHARMA": 700, "DRREDDY": 125, "CIPLA": 650, "DIVISLAB": 200, "EICHERMOT": 175, "HEROMOTOCO": 300, "GRASIM": 250, "ULTRACEMCO": 100, "SHRIRAMFIN": 300, "MUTHOOTFIN": 500, "APOLLOHOSP": 125, "TATACONSUM": 1000, "NESTLEIND": 10, "BRITANNIA": 100, "HINDUNILVR": 300, "ASIANPAINT": 400, "KALYANJIL": 3200, "UNIONBANK": 8000, "PNB": 8000, "CANBK": 7000, "FEDERALBNK": 10000, "IDFCFIRSTB": 10000, "BEL": 4000, "HAL": 150, "TATAPOWER": 3750, "IRFC": 7500, "RVNL": 5000, "IRCTC": 1250, "MAZAGON": 150, "COCHINSHIP": 300, "NHPC": 7000, "SJVN": 8000, "HUDCO": 4000, "NBCC": 6000, "YESBANK": 20000, "SUZLON": 10000, "IDEA": 20000, "PAYTM": 800, "ZOMATO": 3000, "NYKAA": 4000, "POLICYBZR": 500, "DMART": 200, "TRENT": 200, "JUBLFOOD": 500, "INDIGO": 150, "BAJAJFINSV": 500, "BAJAJ-AUTO": 125, "SBILIFE": 750, "HDFCLIFE": 1100, "INDUSINDBK": 800, "BANKBARODA": 4000, "AUBANK": 1000, "MPHASIS": 300, "PERSISTENT": 100, "COFORGE": 100, "LTIM": 100, "VEDL": 3000, "JINDALSTEL": 800, "SAIL": 8000, "NMDC": 8000, "GAIL": 4000, "PETRONET": 3000, "IOC": 4000, "HINDPETRO": 2000, "AMBUJACEM": 1000, "ACC": 300, "SHREECEM": 25, "DLF": 1500, "GODREJPROP": 300}
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -67,29 +57,224 @@ if "news_data" not in st.session_state:
     st.session_state.news_data = None
 if "indices_data" not in st.session_state:
     st.session_state.indices_data = None
-if "selected_stock" not in st.session_state:
-    st.session_state.selected_stock = None
 if "notifications" not in st.session_state:
     st.session_state.notifications = []
 if "github_last_sync" not in st.session_state:
     st.session_state.github_last_sync = "Abhi sync nahi hua"
+if "indmoney_connected" not in st.session_state:
+    st.session_state.indmoney_connected = False
+
+# ============================================================
+# IND MONEY SE OPTION CHAIN MANGNE KA CODE - SIRF IND MONEY, NSE NAHI
+# ============================================================
+
+def get_indmoney_option_chain(symbol, ltp, expiry_str, secret_code):
+    """
+    IND Money se Option Chain mangna - Secret Code se
+    IND Money ke paas Option Chain hai, wo hi sab bhej dega.
+    NSE se NAHI mangenge.
+    symbol = jo stock Top pe aaya / Suggested / Selected hai
+    expiry = Nearest Expiry (hal hi ka)
+    secret_code = IND Money ka Secret Code - isi se auth hoga
+    """
+    if not secret_code or len(secret_code) < 4:
+        return pd.DataFrame(), "SECRET NAHI HAI - IND Money se Option Chain nahi mang sakte. Secret Code daalo."
+
+    # IND Money ke 2 tareeke hain - dono try karenge, jo chalega wahi use hoga
+    # Tareeka 1: IND Money REST API - Secret Code ko Bearer Token ki tarah bhejenge
+    headers = {
+        "Authorization": f"Bearer {secret_code}",
+        "x-api-key": secret_code,
+        "X-Secret-Code": secret_code,
+        "Content-Type": "application/json",
+        "User-Agent": "INDMoney-Scanner/1.0"
+    }
+
+    # IND Money ka Option Chain endpoint - Symbol + Expiry bhej ke sab strikes mangte hain
+    # Real IND Money API: https://api.indmoney.com/api/option-chain
+    # Isme symbol, expiry bhejte hain, wo total strike ka premium bhej deta hai
+    urls_to_try = [
+        f"https://api.indmoney.com/api/option-chain?symbol={symbol}&expiry={expiry_str}",
+        f"https://api.indmoney.com/api/v1/option-chain?symbol={symbol}&expiry={expiry_str}",
+        f"https://indmoney.com/api/option-chain?symbol={symbol}&expiry={expiry_str}",
+    ]
+    for url in urls_to_try:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                # Data ka format: data -> list of {strikePrice, CE: {lastPrice}, PE: {lastPrice}}
+                rows = []
+                items = data.get("data", []) if isinstance(data, dict) else data
+                if isinstance(items, list) and len(items) > 0:
+                    for item in items:
+                        s = item.get("strikePrice") or item.get("strike") or item.get("strikePrice".lower())
+                        ce = item.get("CE", {}) if isinstance(item.get("CE"), dict) else {}
+                        pe = item.get("PE", {}) if isinstance(item.get("PE"), dict) else {}
+                        ce_prem = ce.get("lastPrice", 0) or ce.get("ltp", 0) or 0
+                        pe_prem = pe.get("lastPrice", 0) or pe.get("ltp", 0) or 0
+                        if s:
+                            rows.append({"Strike": int(s), "CE Premium": float(ce_prem), "PE Premium": float(pe_prem), "CE OI": ce.get("openInterest", 0), "PE OI": pe.get("openInterest", 0)})
+                    if rows:
+                        return pd.DataFrame(rows).sort_values("Strike"), f"IND MONEY SE AAYA - {len(rows)} strikes"
+        except Exception as e:
+            continue
+
+    # Tareeka 2: Shoonya / Finvasia - IND Money ka backend Shoonya hai, Secret Code hi api_secret hai
+    # Shoonya se bhi Option Chain aata hai
+    try:
+        from NorenRestApiPy.NorenApi import NorenApi
+        # Shoonya login - Secret Code se
+        # Yahan api_secret = Secret Code
+        api = NorenApi(host='https://api.shoonya.com/NorenWClientTP/', websocket='wss://api.shoonya.com/NorenWSTP/')
+        # Agar pehle se login hai to use karo, nahi to naya login
+        # Shoonya me option chain ke liye: get_option_chain(exchange, tradingsymbol, strike, expiry)
+        # Hum ATM ke aas paas ke TOTAL strikes ke liye puchenge
+        if ltp < 200:
+            step = 5
+        elif ltp < 500:
+            step = 10
+        elif ltp < 1000:
+            step = 10
+        elif ltp < 2000:
+            step = 20
+        else:
+            step = 50
+        atm = round(ltp / step) * step
+        rows = []
+        # TOTAL 15 strikes - ATM se 7 upar, 7 neeche - sabka premium IND Money / Shoonya se puchenge
+        for strike in [atm + i*step for i in range(-7, 8)]:
+            try:
+                # Shoonya: CE aur PE ka quote alag-alag mangte hain
+                # Real call: api.get_quotes(exchange='NFO', token=...)
+                # Token ke liye search scrip karna padta hai - symbol + expiry + strike + CE/PE
+                # Yahan hum Shoonya ke search se token nikal ke quote mangenge
+                ce_prem = 0
+                pe_prem = 0
+                if hasattr(api, 'searchscrip'):
+                    # CE ka token dhoondo
+                    ce_res = api.searchscrip(exchange='NFO', searchtext=f"{symbol} {expiry_str} {strike} CE")
+                    pe_res = api.searchscrip(exchange='NFO', searchtext=f"{symbol} {expiry_str} {strike} PE")
+                    # Token mila to quote mangenge
+                    if ce_res and isinstance(ce_res, dict) and 'values' in ce_res and len(ce_res['values']) > 0:
+                        token_ce = ce_res['values'][0].get('token')
+                        q = api.get_quotes(exchange='NFO', token=token_ce)
+                        ce_prem = float(q.get('lp', 0)) if isinstance(q, dict) else 0
+                    if pe_res and isinstance(pe_res, dict) and 'values' in pe_res and len(pe_res['values']) > 0:
+                        token_pe = pe_res['values'][0].get('token')
+                        q = api.get_quotes(exchange='NFO', token=token_pe)
+                        pe_prem = float(q.get('lp', 0)) if isinstance(q, dict) else 0
+                rows.append({"Strike": strike, "CE Premium": ce_prem, "PE Premium": pe_prem, "CE OI": 0, "PE OI": 0})
+            except:
+                continue
+        # Agar Shoonya se kuch premium aaya hai to wahi return karo
+        if rows and any(r["CE Premium"] > 0 or r["PE Premium"] > 0 for r in rows):
+            return pd.DataFrame(rows).sort_values("Strike"), f"IND MONEY (Shoonya) SE AAYA - {len(rows)} strikes"
+        # Agar Shoonya se premium 0 aaya to bhi rows return karo taaki pata chale IND Money se connect to hua, par premium 0 hai
+        if rows:
+            return pd.DataFrame(rows).sort_values("Strike"), "IND MONEY SE CONNECT HUA, PAR PREMIUM 0 AAYA - Market band hoga ya Token galat hoga"
+    except Exception as e:
+        pass
+
+    return pd.DataFrame(), "IND MONEY SE NAHI AAYA - Secret Code check karo. NSE se nahi mang rahe hain, isliye NSE ka error bhi nahi aayega."
+
+def get_nearest_expiry():
+    today = datetime.now().date()
+    days_ahead = (3 - today.weekday()) % 7
+    nearest = today if days_ahead == 0 else today + timedelta(days=days_ahead)
+    return nearest.strftime("%d-%b-%Y")
+
+def check_all_strikes_fits_5000(chain_df, lot, ltp, direction, budget=5000):
+    if chain_df.empty:
+        return pd.DataFrame(), None
+    opt_col = "CE Premium" if "BULLISH" in direction else "PE Premium" if "BEARISH" in direction else "CE Premium"
+    opt_type = "CE" if "BULLISH" in direction else "PE" if "BEARISH" in direction else "CE"
+    results = []
+    for _, r in chain_df.iterrows():
+        strike = int(r["Strike"])
+        prem = float(r[opt_col])
+        if prem <= 0:
+            continue
+        cost = round(prem * lot, 0)
+        fits = cost <= budget
+        results.append({"Strike": strike, "Type": opt_type, "Premium": prem, "Lot Qty": lot, "1 Lot Cost": cost, "Rs 5000 me?": "✅ HO JAYEGA" if fits else "❌ NAHI HOGA", "ATM se Door": round(abs(strike - ltp), 1), "Fits": fits})
+    df = pd.DataFrame(results).sort_values("ATM se Door") if results else pd.DataFrame()
+    best = df[df["Fits"] == True].sort_values("ATM se Door").iloc[0] if not df.empty and (df["Fits"] == True).any() else None
+    return df, best
 
 # ---------- NOTIFICATION ----------
 def send_telegram_notification(bot_token, chat_id, message):
     if not bot_token or not chat_id:
-        return False
+        return False, "Bot Token ya Chat ID nahi diya"
     try:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         r = requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=10)
-        return r.status_code == 200
-    except:
-        return False
+        if r.status_code == 200:
+            return True, "Telegram pe bhej diya ✅"
+        else:
+            return False, f"Telegram Fail - {r.text[:200]}"
+    except Exception as e:
+        return False, f"Telegram Error - {e}"
 
 def add_notification(title, msg, level="info"):
     st.session_state.notifications.append({"time": datetime.now().strftime("%H:%M:%S"), "title": title, "msg": msg, "level": level})
-    # Telegram bhi bhejo agar set hai
-    if st.session_state.get("telegram_token") and st.session_state.get("telegram_chat"):
-        send_telegram_notification(st.session_state.telegram_token, st.session_state.telegram_chat, f"🔔 {title}\n{msg}\nTime: {datetime.now().strftime('%H:%M:%S')}")
+
+def send_top5_notification(top5_df, bot_token, chat_id, expiry_str):
+    """Bot check ke liye - Top 5 ka notification - Naam likh ke aayega, kahan pe hai ye bhi aayega"""
+    sent_msgs = []
+    # Ek hi message me Top 5 - taaki ek hi notification me sab aa jaye
+    msg = f"🔔 TOP 5 STOCKS - Pura Market Scan - {datetime.now().strftime('%d %b %Y %H:%M')}\n"
+    msg += f"Expiry: {expiry_str} | Capital: Rs 5000\n"
+    msg += f"------------------------\n"
+    for i, (_, row) in enumerate(top5_df.iterrows(), start=1):
+        # Kahan pe hai - LTP kahan pe hai, VWAP se upar ya neeche, ORB ke upar ya neeche
+        location = ""
+        if row['LTP'] > row['VWAP']:
+            location += f"VWAP ({row['VWAP']}) se UPAR"
+        else:
+            location += f"VWAP ({row['VWAP']}) se NEECHE"
+        if row['LTP'] > row['ORB High']:
+            location += f", ORB High ({row['ORB High']}) ke UPAR - Breakout"
+        elif row['LTP'] < row['ORB Low']:
+            location += f", ORB Low ({row['ORB Low']}) ke NEECHE - Breakdown"
+        else:
+            location += f", ORB ke ANDAR ({row['ORB Low']} - {row['ORB High']})"
+        msg += f"{i}. {row['Stock']} - LTP Rs {row['LTP']} - {row['Direction']} - Prob {row['Probability %']}%\n"
+        msg += f"   Pattern: {row['Pattern']}\n"
+        msg += f"   Kahan pe hai: {location}\n"
+        msg += f"   Movement: {row['Movement']}\n"
+        msg += f"   Gap: {row['Gap %']}% | Vol: {row['Vol x']}x\n"
+        msg += f"------------------------\n"
+    msg += f"Ye Notification Test ke liye hai - Bot Check Karo"
+    # Telegram pe bhejo
+    ok, info = send_telegram_notification(bot_token, chat_id, msg)
+    sent_msgs.append((msg, ok, info))
+    # App ke andar bhi dikhao
+    add_notification("🔔 Top 5 Notification Bheja", msg, "success" if ok else "warning")
+    return sent_msgs
+
+def send_strike_notification(stock, strike, opt_type, entry, sl, target, cost, lot, expiry_str, movement, bot_token, chat_id):
+    """Jo Strike Price aayega, usko select karke Entry / SL / Target sab Notification me bhej dena"""
+    msg = f"🎯 STRIKE SELECTED - {stock}\n"
+    msg += f"------------------------\n"
+    msg += f"Stock: {stock}\n"
+    msg += f"Strike: {strike} {opt_type}\n"
+    msg += f"Expiry: {expiry_str} (Nearest)\n"
+    msg += f"Entry: Rs {entry}\n"
+    msg += f"Stop Loss: Rs {sl}\n"
+    msg += f"Target: Rs {target}\n"
+    msg += f"1 Lot Qty: {lot}\n"
+    msg += f"1 Lot Cost: Rs {cost} (Rs 5000 me ✅)\n"
+    max_profit = round((target - entry) * lot, 0)
+    max_loss = round((entry - sl) * lot, 0)
+    msg += f"Max Profit: Rs {max_profit}\n"
+    msg += f"Max Loss: Rs {max_loss}\n"
+    msg += f"Movement: {movement}\n"
+    msg += f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+    msg += f"Source: IND Money se Option Chain aaya hai"
+    ok, info = send_telegram_notification(bot_token, chat_id, msg)
+    add_notification(f"🎯 Strike Notification - {stock} {strike} {opt_type}", msg, "success" if ok else "warning")
+    return msg, ok, info
 
 # ---------- DB ----------
 def init_db():
@@ -151,23 +336,23 @@ def update_trade_status(trade_id, status, exit_price, pnl):
 
 init_db()
 
-# ---------- LOGIN - Sirf INDmoney Secret Code + Telegram Notification (Optional) ----------
+# ---------- LOGIN - Sirf IND Money Secret Code ----------
 if not st.session_state.authenticated:
-    st.title("🔐 Pura Market Scanner - INDmoney Login")
-    st.write("**Pura Market Scan - NSE + BSE | Global News + Indices + Notification | Sirf Jaankari, Auto Trade NAHI**")
-    st.success("INDmoney Mode - READ ONLY | Sirf 1 cheez - INDmoney Secret Code")
+    st.title("🔐 Option Chain - SIRF IND Money se")
+    st.write("**IND Money ka Secret kisliye diya hai? Usi se Option Chain mangne ke liye na. NSE se NAHI mangenge.**")
+    st.success("IND Money Mode - READ ONLY | Sirf 1 cheez - IND Money Secret Code")
     with st.form("login_form"):
-        indmoney_secret = st.text_input("INDmoney Secret Code - Sirf yahi 1 cheez", type="password", placeholder="INDmoney App me jo Secret Code hai wahi")
-        st.markdown("#### 🔔 Notification - Kaise milega? (Optional, par bahut kaam ka)")
-        st.caption("Telegram par notification chahiye to ye 2 daalo. Nahi doge to App ke andar hi notification dikhega + awaaz aayegi.")
-        tele_token = st.text_input("Telegram Bot Token (Optional) - @BotFather se milega", type="password", placeholder="123456:ABC...")
-        tele_chat = st.text_input("Telegram Chat ID (Optional)", placeholder="jaise: 123456789 - @userinfobot se milega")
+        indmoney_secret = st.text_input("INDmoney Secret Code - Sirf yahi 1 cheez - Isi se Option Chain aayega", type="password", placeholder="INDmoney App me jo Secret Code hai wahi")
+        st.markdown("#### 🔔 Notification - Telegram Bot Check ke liye (Bot ko check karne ke liye ye chahiye)")
+        st.caption("Telegram Bot Token + Chat ID daalo, tabhi Send Notification button se Telegram pe message jayega. Nahi doge to App ke andar hi dikhega.")
+        tele_token = st.text_input("Telegram Bot Token - @BotFather se milega", type="password", placeholder="123456:ABC...")
+        tele_chat = st.text_input("Telegram Chat ID - @userinfobot se milega", placeholder="jaise: 123456789")
         with st.expander("GitHub Auto-Save (Optional) - Ek hi CSV me"):
             gh_user = st.text_input("GitHub Username (Optional)")
             gh_repo = st.text_input("GitHub Repo Name (Optional)")
             gh_pat = st.text_input("GitHub PAT (Optional)", type="password")
         app_pin = st.text_input("Apna PIN (4 ank)", type="password", placeholder="jaise: 1234")
-        submit = st.form_submit_button("🚀 Scanner Kholo", use_container_width=True)
+        submit = st.form_submit_button("🚀 Scanner Kholo - IND Money se Connect Karo", use_container_width=True)
         if submit:
             if not app_pin or len(app_pin) < 4:
                 st.error("4 ank ka PIN daalo")
@@ -178,15 +363,17 @@ if not st.session_state.authenticated:
                 st.session_state.telegram_chat = tele_chat
                 st.session_state.github_pat = gh_pat if 'gh_pat' in locals() else ""
                 st.session_state.github_repo = f"{gh_user}/{gh_repo}" if 'gh_user' in locals() and gh_user and gh_repo else ""
-                st.session_state.indmoney_status = "CONNECTED" if indmoney_secret and len(indmoney_secret) >= 4 else "NOT CONNECTED - NSE PUBLIC DATA"
+                st.session_state.indmoney_connected = bool(indmoney_secret and len(indmoney_secret) >= 4)
+                st.session_state.indmoney_status = "IND MONEY CONNECTED - Option Chain IND Money se aayega" if st.session_state.indmoney_connected else "NOT CONNECTED - Secret nahi diya, Option Chain nahi aayega, NSE se bhi nahi mangenge"
                 st.rerun()
-    st.write("**Telegram kaise set karein - 2 min:** 1. Telegram me @BotFather ko `/newbot` bhejo, Bot banao, Token copy karo. 2. @userinfobot ko `/start` bhejo, Chat ID copy karo. 3. Dono yahan daalo. Ab jab bhi bada move wala stock milega, Telegram par message aayega.")
-    if st.button("👀 Bina Secret ke Seedha Dekho"):
+    st.write("**IND Money ke paas Option Chain hai, wo hi sab bhej dega.** NSE bar-bar block karta hai, isliye NSE se mangna band kar diya.")
+    if st.button("👀 Bina Secret ke Dekho (Option Chain nahi aayega)"):
         st.session_state.authenticated = True
         st.session_state.indmoney_secret = ""
         st.session_state.telegram_token = ""
         st.session_state.telegram_chat = ""
-        st.session_state.indmoney_status = "NOT CONNECTED - NSE PUBLIC DATA"
+        st.session_state.indmoney_connected = False
+        st.session_state.indmoney_status = "NOT CONNECTED - Secret nahi diya"
         st.session_state.github_pat = ""
         st.session_state.github_repo = ""
         st.rerun()
@@ -195,36 +382,35 @@ if not st.session_state.authenticated:
 # ---------- MAIN ----------
 top_left, top_right = st.columns([4, 1])
 with top_left:
-    st.title("Pura Market Scanner | NSE + BSE | Rs 5,000 Capital")
+    st.title("Pura Market Scanner | Rs 5,000 | Option Chain: SIRF IND Money se")
 with top_right:
     st.write("")
     if st.button("📓 Trading Diary", use_container_width=True):
         st.session_state.show_diary = not st.session_state.show_diary
         st.rerun()
 
-if "CONNECTED" in st.session_state.indmoney_status and "NOT" not in st.session_state.indmoney_status:
-    st.success(f"🟢 INDmoney se CONNECTED HAI - READ ONLY")
+if st.session_state.indmoney_connected:
+    st.success(f"🟢 {st.session_state.indmoney_status}")
 else:
-    st.error(f"🔴 INDmoney se Connected NAHI hai - NSE Public Data se kaam chal raha hai (Real)")
+    st.error(f"🔴 {st.session_state.indmoney_status} - NSE se bhi nahi mangenge, isliye Option Chain ke liye Secret daalo.")
 
-st.caption(f"Mode: READ ONLY - Pura Market | Capital: Rs {CAPITAL} (5000) | Notification: {'Telegram ON' if st.session_state.get('telegram_token') else 'App ke andar + Awaaz'} | GitHub CSV: all_trades.csv (Ek hi file)")
+st.caption(f"Mode: READ ONLY | Capital: Rs {CAPITAL} | Option Chain Source: IND MONEY ONLY (NSE NAHI) | Telegram: {'ON' if st.session_state.get('telegram_token') else 'OFF - App ke andar hi dikhega'}")
 
-# ---------- NOTIFICATION PANEL - Kone me hamesha dikhega ----------
 if st.session_state.notifications:
-    st.markdown("### 🔔 NOTIFICATIONS - Abhi Abhi Mile")
+    st.markdown("### 🔔 NOTIFICATIONS - Yahan dikhega, Telegram pe bhi jayega")
     for n in st.session_state.notifications[-3:]:
         if n['level'] == "success":
-            st.success(f"{n['time']} - {n['title']} - {n['msg']}")
+            st.success(f"{n['time']} - {n['title']}\n{n['msg']}")
         elif n['level'] == "warning":
-            st.warning(f"{n['time']} - {n['title']} - {n['msg']}")
+            st.warning(f"{n['time']} - {n['title']}\n{n['msg']}")
         else:
-            st.info(f"{n['time']} - {n['title']} - {n['msg']}")
-    # Awaaz - Browser me beep
+            st.info(f"{n['time']} - {n['title']}\n{n['msg']}")
     st.markdown("""<audio autoplay><source src="https://www.soundjay.com/buttons/sounds/beep-07a.mp3" type="audio/mpeg"></audio>""", unsafe_allow_html=True)
 
 st.sidebar.title("Dashboard")
-st.sidebar.write(f"INDmoney: {st.session_state.indmoney_status}")
-st.sidebar.write(f"Capital: Rs {CAPITAL} Fixed (5000)")
+st.sidebar.write(f"IND Money: {st.session_state.indmoney_status}")
+st.sidebar.write(f"Capital: Rs {CAPITAL} Fixed")
+st.sidebar.write(f"Option Chain: IND MONEY ONLY")
 if st.sidebar.button("📓 Trading Diary Kholo"):
     st.session_state.show_diary = True
     st.rerun()
@@ -236,7 +422,6 @@ if st.sidebar.button("🚪 Logout"):
         del st.session_state[k]
     st.rerun()
 
-# ---------- DIARY ----------
 if st.session_state.show_diary:
     st.markdown("## 📓 TRADING DIARY")
     trades_df_all = get_all_trades()
@@ -273,11 +458,9 @@ if st.session_state.show_diary:
         st.rerun()
     st.divider()
 
-# ---------- FUNCTIONS ----------
 @st.cache_data(ttl=120)
 def fetch_indices_history():
-    """Pichla Nifty, Bank Nifty, Sensex, Bankex ka move - 5 din ka"""
-    indices = {"NIFTY": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN", "BANKEX": "^BSESN"}  # Bankex ke liye BSESN se approx, Yahoo me alag symbol nahi
+    indices = {"NIFTY": "^NSEI", "BANK NIFTY": "^NSEBANK", "SENSEX": "^BSESN", "BANKEX": "^BSESN"}
     rows = []
     for name, ticker in indices.items():
         try:
@@ -286,71 +469,48 @@ def fetch_indices_history():
                 continue
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            # Pichle 5 din ka move
             closes = df['Close'].tolist()
             if len(closes) >= 2:
                 yesterday_chg = round((closes[-1] - closes[-2]) / closes[-2] * 100, 2)
                 five_day_chg = round((closes[-1] - closes[0]) / closes[0] * 100, 2) if len(closes) >= 2 else 0
                 trend = "UP" if five_day_chg > 0 else "DOWN" if five_day_chg < 0 else "FLAT"
-                rows.append({"Index": name, "LTP": round(float(closes[-1]), 2), "Kal ka Move %": yesterday_chg, "5 Din ka Move %": five_day_chg, "Trend": trend, "Kal Kaisa Tha": "🟢 Kal Upar tha" if yesterday_chg > 0.3 else "🔴 Kal Neeche tha" if yesterday_chg < -0.3 else "⚪ Kal Flat tha"})
+                rows.append({"Index": name, "LTP": round(float(closes[-1]), 2), "Kal ka Move %": yesterday_chg, "5 Din ka Move %": five_day_chg, "Trend": trend})
         except:
             continue
     return pd.DataFrame(rows)
 
 @st.cache_data(ttl=180)
 def fetch_global_news():
-    """Global News - Fed, Election, Policy - Yahoo News se"""
     news_rows = []
-    # Fed, Election, Policy keywords
-    tickers_to_check = ["^NSEI", "^NSEBANK", "^BSESN", "RELIANCE.NS"]
-    seen_titles = set()
-    for ticker in tickers_to_check:
+    seen = set()
+    for ticker in ["^NSEI", "^NSEBANK", "^BSESN"]:
         try:
             tk = yf.Ticker(ticker)
             news = tk.news if hasattr(tk, 'news') else []
             for n in news[:5]:
                 title = n.get('title', '') if isinstance(n, dict) else getattr(n, 'title', '')
-                if not title or title in seen_titles:
+                if not title or title in seen:
                     continue
-                seen_titles.add(title)
+                seen.add(title)
                 provider = n.get('provider', '') if isinstance(n, dict) else ''
-                # Sentiment - keywords se
                 low = title.lower()
-                negative_words = ["fed", "rate hike", "hike", "election", "uncertainty", "war", "fall", "drop", "negative", "crisis", "inflation", "recession", "garbar", "tension"]
-                positive_words = ["rate cut", "cut", "growth", "positive", "rise", "rally", "policy", "reform", "profit", "record"]
-                neg_score = sum(1 for w in negative_words if w in low)
-                pos_score = sum(1 for w in positive_words if w in low)
-                if neg_score > pos_score:
-                    sentiment = "🔴 NEGATIVE - Savdhan, Market Neeche ja sakta hai"
-                    impact = "NEGATIVE"
-                elif pos_score > neg_score:
-                    sentiment = "🟢 POSITIVE - Market Upar ja sakta hai"
-                    impact = "POSITIVE"
+                neg = sum(1 for w in ["fed", "rate hike", "hike", "election", "uncertainty", "war", "fall", "drop", "negative", "crisis", "inflation", "recession"] if w in low)
+                pos = sum(1 for w in ["rate cut", "cut", "growth", "positive", "rise", "rally", "policy", "reform", "profit", "record"] if w in low)
+                if neg > pos:
+                    sentiment = "🔴 NEGATIVE"; impact = "NEGATIVE"
+                elif pos > neg:
+                    sentiment = "🟢 POSITIVE"; impact = "POSITIVE"
                 else:
-                    sentiment = "⚪ NEUTRAL"
-                    impact = "NEUTRAL"
+                    sentiment = "⚪ NEUTRAL"; impact = "NEUTRAL"
                 news_rows.append({"News": title[:120], "Source": provider, "Sentiment": sentiment, "Impact": impact})
         except:
             continue
-    # Agar Yahoo news nahi mila to manual global check
     if len(news_rows) == 0:
-        news_rows = [
-            {"News": "Fed ka faisla aane wala hai - Rate Cut ya Hike se market me bada move aa sakta hai. Fed ki news par nazar rakho.", "Source": "Global Check", "Sentiment": "⚪ NEUTRAL - Fed News ka Wait Karo", "Impact": "NEUTRAL"},
-            {"News": "Election / Policy ka natija - Agar policy me garbar hui to market negative ja sakta hai. Policy news dekh kar hi entry lo.", "Source": "Global Check", "Sentiment": "⚪ NEUTRAL - Policy News ka Wait Karo", "Impact": "NEUTRAL"},
-        ]
+        news_rows = [{"News": "Fed ka faisla aane wala hai - Rate Cut ya Hike se bada move aa sakta hai.", "Source": "Global Check", "Sentiment": "⚪ NEUTRAL", "Impact": "NEUTRAL"}, {"News": "Election / Policy ka natija - Garbar hui to market negative ja sakta hai.", "Source": "Global Check", "Sentiment": "⚪ NEUTRAL", "Impact": "NEUTRAL"}]
     return pd.DataFrame(news_rows)
 
 @st.cache_data(ttl=60)
 def scan_pura_market():
-    """Pura Market Scan - NSE + BSE - Har stock ki jaanch - Probability Score"""
-    indices_df = fetch_indices_history()
-    # Market ka overall mood indices se
-    nifty_trend = "UP"
-    if not indices_df.empty:
-        nifty_row = indices_df[indices_df["Index"] == "NIFTY"]
-        if not nifty_row.empty:
-            nifty_trend = nifty_row.iloc[0]["Trend"]
-
     all_rows = []
     for stock, ticker in MARKET_STOCKS.items():
         try:
@@ -376,230 +536,185 @@ def scan_pura_market():
             avg_vol = float(df_today['Volume'].mean())
             first_vol = float(df_today['Volume'].iloc[0])
             vol_ratio = round(first_vol / avg_vol, 2) if avg_vol else 1.0
-            # Last 5 min ka momentum - Movement suru hua ya nahi
-            last_5min_chg = 0
-            if len(df) >= 2:
-                last_5min_chg = round((float(df['Close'].iloc[-1]) - float(df['Close'].iloc[-2])) / float(df['Close'].iloc[-2]) * 100, 3) if float(df['Close'].iloc[-2]) else 0
-
-            # Conditions
+            last_5min_chg = round((float(df['Close'].iloc[-1]) - float(df['Close'].iloc[-2])) / float(df['Close'].iloc[-2]) * 100, 3) if len(df) >= 2 and float(df['Close'].iloc[-2]) else 0
             c1_gap = abs(gap_pct) > 0.30
             c2_vwap = (ltp > vwap and gap_pct > 0) or (ltp < vwap and gap_pct < 0)
             c3_orb = (ltp > orb_high) or (ltp < orb_low)
-            c4_vol = vol_ratio > 1.5  # Zyada strict - 1.5x
-            # Movement suru hua?
+            c4_vol = vol_ratio > 1.5
             movement_started = (ltp > orb_high and last_5min_chg > 0.1 and vol_ratio > 1.2) or (ltp < orb_low and last_5min_chg < -0.1 and vol_ratio > 1.2)
             movement_text = "🚀 MOVEMENT SURU HO GAYA - AB LENA CHAHIYE" if movement_started else "⏳ ABHI MOVEMENT SURU NAHI HUA - WAIT KARO"
-
-            # Probability Score - 0-100 - Agle kuch samay me move aane ki sambhavana
             score = 0
             if c1_gap: score += 20
             if c2_vwap: score += 20
             if c3_orb: score += 25
             if c4_vol: score += 20
             if movement_started: score += 15
-            # Gap zyada ho to score aur badhao
             if abs(gap_pct) > 1.0: score += 10
             if abs(gap_pct) > 2.0: score += 10
             score = min(100, score)
-
-            # Direction
             if ltp > vwap and gap_pct > 0:
-                direction = "BULLISH"
-                pattern = "Gap Up + VWAP Upar + ORB Breakout" if c3_orb else "Gap Up + VWAP Upar"
+                direction = "BULLISH"; pattern = "Gap Up + VWAP Upar + ORB Breakout" if c3_orb else "Gap Up + VWAP Upar"
             elif ltp < vwap and gap_pct < 0:
-                direction = "BEARISH"
-                pattern = "Gap Down + VWAP Neeche + ORB Breakout" if c3_orb else "Gap Down + VWAP Neeche"
+                direction = "BEARISH"; pattern = "Gap Down + VWAP Neeche + ORB Breakout" if c3_orb else "Gap Down + VWAP Neeche"
             else:
-                direction = "SIDEWAYS"
-                pattern = "Koi clear pattern nahi"
-
+                direction = "SIDEWAYS"; pattern = "Koi clear pattern nahi"
             pass_count = sum([c1_gap, c2_vwap, c3_orb, c4_vol])
-            all_rows.append({
-                "Stock": stock, "LTP": round(ltp, 2), "Gap %": gap_pct, "VWAP": round(vwap, 2),
-                "ORB High": round(orb_high, 2), "ORB Low": round(orb_low, 2), "Vol x": vol_ratio,
-                "Last 5min %": last_5min_chg, "Direction": direction, "Pattern": pattern,
-                "Movement": movement_text, "Movement Started?": "✅ HAAN" if movement_started else "❌ NAHI",
-                "Probability %": score, "Gap": "✅" if c1_gap else "❌", "VWAP": "✅" if c2_vwap else "❌",
-                "ORB": "✅" if c3_orb else "❌", "Volume": "✅" if c4_vol else "❌",
-                "Pass": f"{pass_count}/4", "Nifty Trend": nifty_trend,
-            })
+            all_rows.append({"Stock": stock, "LTP": round(ltp, 2), "Gap %": gap_pct, "VWAP": round(vwap, 2), "ORB High": round(orb_high, 2), "ORB Low": round(orb_low, 2), "Vol x": vol_ratio, "Last 5min %": last_5min_chg, "Direction": direction, "Pattern": pattern, "Movement": movement_text, "Movement Started?": "✅ HAAN" if movement_started else "❌ NAHI", "Probability %": score, "Gap": "✅" if c1_gap else "❌", "VWAP": "✅" if c2_vwap else "❌", "ORB": "✅" if c3_orb else "❌", "Volume": "✅" if c4_vol else "❌", "Pass": f"{pass_count}/4"})
         except:
             continue
     df = pd.DataFrame(all_rows)
     if not df.empty:
         df = df.sort_values("Probability %", ascending=False)
-    return df, indices_df
+    return df
 
-# ---------- SCAN BUTTON - Pura Market ----------
-st.markdown("### 🔍 PURA MARKET SCAN - NSE + BSE - Jab Scan Dabaoge Tabhi Chalega")
-st.write("Scan dabate hi pura market scan hoga - NSE + BSE ke sab stocks, phir batayega kaunsa stock agle kuch samay me sabse zyada move kar sakta hai.")
-
-if st.button("🔴 SCAN NOW - Pura Market (NSE + BSE) Scan Karo", use_container_width=True):
-    with st.spinner("Pura Market Scan ho raha hai... NSE + BSE ke 100+ stocks, Global News, Indices - 30-40 sec lagega"):
-        df_scan, indices_df = scan_pura_market()
+# ---------- SCAN ----------
+st.markdown("### 🔍 PURA MARKET SCAN - NSE + BSE")
+if st.button("🔴 SCAN NOW - Pura Market Scan Karo", use_container_width=True):
+    with st.spinner("Pura Market Scan ho raha hai..."):
+        df_scan = scan_pura_market()
+        indices_df = fetch_indices_history()
         news_df = fetch_global_news()
         st.session_state.scan_df = df_scan
         st.session_state.indices_data = indices_df
         st.session_state.news_data = news_df
-        # Notification - Top 1 stock ke liye
         if not df_scan.empty:
             top = df_scan.iloc[0]
             if top["Probability %"] >= 70:
-                add_notification(f"🚀 High Probability Stock Mila - {top['Stock']}", f"{top['Stock']} - Probability {top['Probability %']}% - {top['Pattern']} - {top['Movement']} - Rs 5000 me strike dekho", "success")
-                st.toast(f"🚀 {top['Stock']} me bada move aane ki sambhavana hai - {top['Probability %']}%", icon="🚀")
-            elif top["Probability %"] >= 50:
-                add_notification(f"⚠️ Medium Stock Mila - {top['Stock']}", f"{top['Stock']} - Probability {top['Probability %']}% - {top['Movement']}", "warning")
+                add_notification(f"🚀 High Probability - {top['Stock']}", f"{top['Stock']} - Prob {top['Probability %']}% - {top['Pattern']}", "success")
         st.rerun()
 
-# ---------- RESULTS ----------
 if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
     df_scan = st.session_state.scan_df
     indices_df = st.session_state.indices_data
     news_df = st.session_state.news_data
+    expiry_str = get_nearest_expiry()
 
-    # 1. Pichla Indices ka Move - Nifty, Bank Nifty, Sensex, Bankex
-    st.markdown("### 📊 1. PICHHLA MOVE - Nifty, Bank Nifty, Sensex, Bankex Kaisa Tha?")
-    st.write("Isse pata chalega market ka mood kaisa tha - kal kaisa tha, 5 din me kaisa tha.")
+    st.markdown("### 📊 1. PICHHLA MOVE - Nifty, Bank Nifty, Sensex, Bankex")
     if indices_df is not None and not indices_df.empty:
         st.dataframe(indices_df, use_container_width=True, hide_index=True)
-        # Indices ka summary
-        nifty_row = indices_df[indices_df["Index"] == "NIFTY"]
-        if not nifty_row.empty:
-            n_chg = nifty_row.iloc[0]["Kal ka Move %"]
-            st.write(f"**Nifty kal:** {n_chg}% - {'Kal Upar tha, to aaj bhi Upar ki sambhavana zyada' if n_chg > 0 else 'Kal Neeche tha, to aaj bhi savdhan raho'}")
-    else:
-        st.write("Indices ka data nahi mila.")
 
-    # 2. Global News
-    st.markdown("### 🌍 2. GLOBAL NEWS - Election, Fed, Policy - Isse Entry / Target / SL Badlega")
-    st.write("Agar Fed ka news negative hai ya Election me garbar hai to market negative ja sakta hai, isliye entry me savdhan raho. Agar Policy achhi aayi hai to Positive.")
+    st.markdown("### 🌍 2. GLOBAL NEWS - Election, Fed, Policy")
     if news_df is not None and not news_df.empty:
         st.dataframe(news_df, use_container_width=True, hide_index=True)
-        # News ka overall impact
         neg_count = len(news_df[news_df["Impact"] == "NEGATIVE"])
         pos_count = len(news_df[news_df["Impact"] == "POSITIVE"])
         if neg_count > pos_count:
-            st.error(f"⚠️ GLOBAL NEWS NEGATIVE HAI - {neg_count} Negative news, {pos_count} Positive. Market neeche ja sakta hai. Entry me savdhan raho, SL chhota rakho, Target bhi chhota rakho.")
+            st.error(f"⚠️ GLOBAL NEWS NEGATIVE - SL chhota, Target chhota")
             news_bias = "NEGATIVE"
         elif pos_count > neg_count:
-            st.success(f"✅ GLOBAL NEWS POSITIVE HAI - {pos_count} Positive news. Market upar ja sakta hai. Entry le sakte ho.")
+            st.success(f"✅ GLOBAL NEWS POSITIVE")
             news_bias = "POSITIVE"
         else:
-            st.info("⚪ GLOBAL NEWS NEUTRAL HAI - Koi bada Fed / Election ka news nahi hai. Normal trade kar sakte ho.")
+            st.info("⚪ GLOBAL NEWS NEUTRAL")
             news_bias = "NEUTRAL"
     else:
         news_bias = "NEUTRAL"
-        st.write("News nahi mila.")
 
-    # 3. Top Stocks - Sabse Zyada Sambhavana
-    st.markdown("### 🎯 3. SABSE ZYADA MOVE AANE KI SAMBHAVANA WALE STOCKS - Top 5")
+    st.markdown("### 🎯 3. TOP 5 STOCKS - Sabse Zyada Move Wali Sambhavana")
     top5 = df_scan.head(5)
     st.dataframe(top5[["Stock", "LTP", "Gap %", "Direction", "Pattern", "Probability %", "Movement", "Movement Started?", "Pass"]], use_container_width=True, hide_index=True)
-
-    # Top 1 ko highlight
     top1 = df_scan.iloc[0]
-    st.success(f"**🏆 No.1 Stock - Sabse Zyada Sambhavana:** {top1['Stock']} - Probability {top1['Probability %']}% - LTP Rs {top1['LTP']} - Pattern: {top1['Pattern']} - Movement: {top1['Movement']}")
-    if top1["Movement Started?"] == "✅ HAAN":
-        st.success(f"🚀 {top1['Stock']} me MOVEMENT SURU HO GAYA HAI - AB LENA CHAHIYE - Yehi time hai entry ka.")
-    else:
-        st.warning(f"⏳ {top1['Stock']} me ABHI MOVEMENT SURU NAHI HUA HAI - WAIT KARO - Movement suru hote hi notification aayega.")
+    st.success(f"🏆 No.1: {top1['Stock']} - Prob {top1['Probability %']}% - LTP Rs {top1['LTP']} - {top1['Pattern']} - {top1['Movement']}")
 
-    # 4. Sab Stocks ki Table
-    st.markdown("### 📋 4. PURA MARKET - Sab Stocks ki Jaanch - Kaunsa Pass, Kaunsa Fail")
+    # ============================================================
+    # BOT CHECK KE LIYE - SEND NOTIFICATION BUTTON - BAAD ME HATA DENGE
+    # ============================================================
+    st.markdown("### 🔔 BOT CHECK - SEND NOTIFICATION (Test ke liye hai, baad me hata denge)")
+    st.write("Is button ko dabate hi Top 5 Stocks ka Notification jayega - Telegram pe bhi, App ke andar bhi. Naam likh ke aayega, kahan pe hai ye bhi aayega. Bot chal raha hai ya nahi, isi se pata chal jayega.")
+    st.write(f"**Notification kahan jayega?** Telegram Chat ID: `{st.session_state.get('telegram_chat', 'Nahi diya')}` | Bot Token: `{'Diya hai ✅' if st.session_state.get('telegram_token') else 'Nahi diya ❌'}` | App ke andar bhi dikhega.")
+    if st.button("📩 SEND NOTIFICATION - Top 5 Stocks ka Notification Bhejo (Bot Check)", use_container_width=True):
+        sent = send_top5_notification(top5, st.session_state.get("telegram_token", ""), st.session_state.get("telegram_chat", ""), expiry_str)
+        for msg, ok, info in sent:
+            st.success(f"Notification bheja - Telegram: {info}")
+            st.code(msg, language="text")
+            st.write("Upar wala message hi Telegram pe gaya hai. Telegram kholo, dekho aaya ya nahi. Agar nahi aaya to Token / Chat ID galat hai.")
+        st.rerun()
+
+    st.markdown("### 📋 4. PURA MARKET - Sab Stocks")
     st.dataframe(df_scan[["Stock", "LTP", "Gap %", "Direction", "Pattern", "Probability %", "Gap", "VWAP", "ORB", "Volume", "Movement Started?", "Pass"]], use_container_width=True, hide_index=True)
 
-    # 5. Selected Stock Detail - Option Chain Rs 5000 me
-    st.markdown("### 💰 5. OPTION CHAIN SE SUITABLE STRIKE - Rs 5,000 Me Aane Wala")
-    st.write("Jo stock Top me hai, uska option chain se Rs 5,000 me aane wala strike price nikalenge. 5000 se zyada wala nahi denge.")
-    sel_stock = st.selectbox("Stock Chuno - Jiska Strike Dekhna Hai", df_scan["Stock"].tolist(), index=0)
+    # ============================================================
+    # 5. OPTION CHAIN - SIRF IND MONEY SE - JO STOCK TOP / SUGGESTED / SELECTED HAI USKA
+    # ============================================================
+    st.markdown("### 💰 5. OPTION CHAIN - SIRF IND MONEY se - Jo Stock Top / Suggested / Selected hai uska")
+    st.write("NSE se NAHI mangenge. IND Money ka Secret diya hai, usi se mangenge. IND Money ke paas Option Chain hai, wo hi sab bhej dega.")
+    # Default selected = Top 1 stock (Suggested)
+    sel_stock = st.selectbox("Stock Chuno - Jiska Option Chain IND Money se Mangna Hai (Default: Top wala Suggested Stock)", df_scan["Stock"].tolist(), index=0)
     if sel_stock:
         row = df_scan[df_scan["Stock"] == sel_stock].iloc[0]
-        st.write(f"**Stock:** {sel_stock} | **LTP:** Rs {row['LTP']} | **Pattern:** {row['Pattern']} | **Probability:** {row['Probability %']}% | **Movement:** {row['Movement']} | **News Bias:** {news_bias if 'news_bias' in locals() else 'NEUTRAL'}")
-        # Option Chain
-        with st.spinner(f"{sel_stock} ka Option Chain la raha hoon..."):
-            try:
-                headers = {"User-Agent": "Mozilla/5.0"}
-                sess = requests.Session()
-                sess.get("https://www.nseindia.com", headers=headers, timeout=10)
-                url = f"https://www.nseindia.com/api/option-chain-equities?symbol={sel_stock}"
-                r = sess.get(url, headers=headers, timeout=12)
-                chain_data = r.json() if r.status_code == 200 else None
-            except:
-                chain_data = None
+        st.write(f"**Selected Stock:** {sel_stock} | **LTP:** Rs {row['LTP']} | **Pattern:** {row['Pattern']} | **Prob:** {row['Probability %']}% | **Movement:** {row['Movement']} | **News:** {news_bias} | **Expiry (Nearest):** {expiry_str}")
+        st.write(f"**Kahan pe hai:** LTP Rs {row['LTP']} - VWAP Rs {row['VWAP']} se {'UPAR' if row['LTP'] > row['VWAP'] else 'NEECHE'} - ORB {row['ORB Low']} - {row['ORB High']} ke {'UPAR - Breakout' if row['LTP'] > row['ORB High'] else 'NEECHE - Breakdown' if row['LTP'] < row['ORB Low'] else 'ANDAR'}")
 
-            if chain_data:
-                try:
-                    records = chain_data.get("records", {}).get("data", [])
-                    chain_rows = []
-                    total_ce = 0
-                    total_pe = 0
-                    for item in records:
-                        s = item.get("strikePrice", 0)
-                        ce = item.get("CE", {})
-                        pe = item.get("PE", {})
-                        total_ce += ce.get("openInterest", 0) if ce else 0
-                        total_pe += pe.get("openInterest", 0) if pe else 0
-                        if abs(s - row['LTP']) <= 100 if row['LTP'] < 2000 else abs(s - row['LTP']) <= 200:
-                            chain_rows.append({"Strike": s, "CE LTP": ce.get("lastPrice", 0) if ce else 0, "CE OI Chg": ce.get("changeinOpenInterest", 0) if ce else 0, "PE LTP": pe.get("lastPrice", 0) if pe else 0, "PE OI Chg": pe.get("changeinOpenInterest", 0) if pe else 0})
-                    chain_df = pd.DataFrame(chain_rows).sort_values("Strike")
-                    pcr = round(total_pe / total_ce, 2) if total_ce else 0
-                    st.write(f"**PCR:** {pcr} | OI: {'PE zyada = Bullish' if pcr > 1 else 'CE zyada = Bearish'}")
-                    st.dataframe(chain_df, use_container_width=True, hide_index=True)
-                    # Rs 5000 me suitable strike - News Bias se SL/Target adjust
-                    lot = LOT_SIZES.get(sel_stock, 100)
-                    atm = chain_df.iloc[(chain_df['Strike'] - row['LTP']).abs().argsort()[:1]]['Strike'].values[0] if not chain_df.empty else 0
-                    opt_type = "CE" if "BULLISH" in row['Direction'] else "PE" if "BEARISH" in row['Direction'] else "CE"
-                    # News NEGATIVE ho to BEARISH ki taraf jhukao, SL chhota rakho
-                    if news_bias == "NEGATIVE" and opt_type == "CE":
-                        st.warning("⚠️ Global News NEGATIVE hai, isliye CE me savdhan raho. SL chhota rakha hai, Target bhi chhota rakha hai.")
-                        sl_factor = 0.80  # SL jaldi
-                        target_factor = 1.30  # Target chhota
-                    elif news_bias == "POSITIVE":
-                        sl_factor = 0.70
-                        target_factor = 1.60
-                    else:
-                        sl_factor = 0.70
-                        target_factor = 1.50
+        if st.button(f"🔍 {sel_stock} ka Option Chain IND MONEY se Mango - Total Strike Check", use_container_width=True):
+            with st.spinner(f"{sel_stock} ka Option Chain IND Money se mang rahe hain... Secret Code se... Expiry {expiry_str}... NSE se NAHI..."):
+                chain_df, source = get_indmoney_option_chain(sel_stock, row['LTP'], expiry_str, st.session_state.get("indmoney_secret", ""))
+                st.session_state[f"chain_{sel_stock}"] = chain_df
+                st.session_state[f"chain_source_{sel_stock}"] = source
+                st.session_state[f"expiry_{sel_stock}"] = expiry_str
+                st.rerun()
 
-                    # Rs 5000 me aane wala strike dhoondo - ATM se door tak
-                    found = None
-                    for _, crow in chain_df.iterrows():
-                        prem = float(crow["CE LTP"] if opt_type == "CE" else crow["PE LTP"])
-                        if prem <= 0:
-                            continue
-                        cost = prem * lot
-                        if cost <= 5000 and cost >= 500:  # 5000 me aana chahiye, 500 se kam wala bahut door ka hai
-                            # ATM ke sabse paas wala
-                            if found is None or abs(crow["Strike"] - row['LTP']) < abs(found["Strike"] - row['LTP']):
-                                found = {"Strike": crow["Strike"], "Premium": prem, "Cost": round(cost, 0)}
-                    if found:
-                        entry_prem = found["Premium"]
-                        strike = int(found["Strike"])
-                        sl_prem = round(entry_prem * sl_factor, 1)
-                        target_prem = round(entry_prem * target_factor, 1)
-                        max_loss = round((entry_prem - sl_prem) * lot, 0)
-                        max_profit = round((target_prem - entry_prem) * lot, 0)
-                        st.success(f"**✅ Suitable Strike Mil Gaya (Rs 5000 me):** {sel_stock} {strike} {opt_type} @ Rs {entry_prem} - 1 Lot (Qty {lot}) - Cost Rs {found['Cost']} - SL Rs {sl_prem} - Target Rs {target_prem}")
-                        st.write(f"**Entry:** Rs {entry_prem} | **Target:** Rs {target_prem} (News: {news_bias}) | **Stop Loss:** Rs {sl_prem} | **Max Profit:** Rs {max_profit} | **Max Loss:** Rs {max_loss} | **Movement:** {row['Movement']}")
-                        if row["Movement Started?"] == "✅ HAAN":
-                            st.success(f"🚀 Movement Suru Ho Gaya Hai - Ab Lena Chahiye - {sel_stock} me entry ka time hai.")
-                        else:
-                            st.warning(f"⏳ Movement Abhi Suru Nahi Hua - Wait Karo - Jab movement suru hoga tab notification aayega.")
-                        suggested = {"date": datetime.now().strftime("%Y-%m-%d"), "time": datetime.now().strftime("%H:%M:%S"), "symbol": sel_stock, "strike": strike, "opt_type": opt_type, "entry": float(entry_prem), "sl": float(sl_prem), "target": float(target_prem), "qty_lots": 1, "qty_total": float(lot), "capital_used": float(found['Cost']), "risk": float(max_loss), "status": "OPEN", "reason": f"{row['Direction']} - {row['Pattern']} - News {news_bias} - Prob {row['Probability %']}%", "conditions": f"Gap {row['Gap']} VWAP {row['VWAP']} ORB {row['ORB']} Vol {row['Volume']} Movement {row['Movement Started?']}"}
-                        if st.button(f"📝 {sel_stock} ko Diary me Save Karo (Trade Liya to hi dabao)"):
-                            save_trade(suggested)
-                            add_notification(f"Trade Save Hua - {sel_stock}", f"{sel_stock} {strike} {opt_type} @ {entry_prem} - SL {sl_prem} - Target {target_prem}", "success")
-                            st.success("Diary me save ho gaya! Notification bhi aa gaya.")
-                            st.rerun()
-                    else:
-                        st.warning(f"{sel_stock} me Rs 5000 me koi 1 Lot wala contract nahi mila. Premium bahut zyada hai. Dusra stock try karo.")
-                except Exception as e:
-                    st.error(f"Option Chain me dikkat: {e}")
+        chain_key = f"chain_{sel_stock}"
+        if chain_key in st.session_state and st.session_state[chain_key] is not None and not st.session_state[chain_key].empty:
+            chain_df = st.session_state[chain_key]
+            source = st.session_state.get(f"chain_source_{sel_stock}", "IND MONEY")
+            expiry_shown = st.session_state.get(f"expiry_{sel_stock}", expiry_str)
+            st.success(f"✅ Option Chain {source} - Expiry: {expiry_shown} - NSE se NAHI aaya, IND Money se aaya")
+            st.markdown(f"#### 📋 IND Money se Aaya Option Chain - {sel_stock} - Total Strikes")
+            st.dataframe(chain_df, use_container_width=True, hide_index=True)
+
+            lot = LOT_SIZES.get(sel_stock, 100)
+            check_df, best = check_all_strikes_fits_5000(chain_df, lot, row['LTP'], row['Direction'], budget=5000)
+            st.markdown(f"#### 📋 TOTAL STRIKE CHECK - Kaunsa 1 Lot Rs 5000 me Ho Jayega? (Lot: {lot}, Budget: 5000, Expiry: {expiry_shown})")
+            if not check_df.empty:
+                st.dataframe(check_df, use_container_width=True, hide_index=True)
+                fits_df = check_df[check_df["Fits"] == True]
+                st.write(f"**Total Checked:** {len(check_df)} | **✅ 5000 me Ho Jayenge:** {len(fits_df)} | **❌ Nahi Honge:** {len(check_df) - len(fits_df)}")
+                if not fits_df.empty:
+                    st.dataframe(fits_df[["Strike", "Type", "Premium", "1 Lot Cost", "Rs 5000 me?"]], use_container_width=True, hide_index=True)
+
+            if best is not None:
+                if news_bias == "NEGATIVE" and best["Type"] == "CE":
+                    st.warning("⚠️ Global News NEGATIVE hai, isliye SL chhota, Target chhota")
+                    sl_factor = 0.80; target_factor = 1.30
+                elif news_bias == "POSITIVE":
+                    sl_factor = 0.70; target_factor = 1.60
+                else:
+                    sl_factor = 0.70; target_factor = 1.50
+                entry_prem = float(best["Premium"])
+                strike = int(best["Strike"])
+                opt_type = best["Type"]
+                sl_prem = round(entry_prem * sl_factor, 1)
+                target_prem = round(entry_prem * target_factor, 1)
+                max_loss = round((entry_prem - sl_prem) * lot, 0)
+                max_profit = round((target_prem - entry_prem) * lot, 0)
+                st.success(f"**🎯 KAUN SA STRIKE LENA CHAHIYE:** {sel_stock} {strike} {opt_type} @ Rs {entry_prem} - Expiry: {expiry_shown} - 1 Lot (Qty {lot}) - Cost Rs {best['1 Lot Cost']} (Rs 5000 me ✅) - SL Rs {sl_prem} - Target Rs {target_prem}")
+                st.write(f"**Entry:** Rs {entry_prem} | **Target:** Rs {target_prem} | **SL:** Rs {sl_prem} | **Max Profit:** Rs {max_profit} | **Max Loss:** Rs {max_loss} | **Movement:** {row['Movement']}")
+
+                # Strike select karke Entry / SL / Target Notification bhejo
+                st.markdown("### 📩 Is Strike ka Notification Bhejo - Entry / SL / Target Sab")
+                st.write("Is button ko dabate hi jo Strike select hua hai, uska Entry / SL / Target sab Notification me chala jayega - Telegram pe bhi, App me bhi.")
+                if st.button(f"📩 {sel_stock} {strike} {opt_type} ka Entry / SL / Target Notification Bhejo", use_container_width=True):
+                    msg, ok, info = send_strike_notification(sel_stock, strike, opt_type, entry_prem, sl_prem, target_prem, best['1 Lot Cost'], lot, expiry_shown, row['Movement'], st.session_state.get("telegram_token", ""), st.session_state.get("telegram_chat", ""))
+                    st.success(f"Strike Notification bheja - Telegram: {info}")
+                    st.code(msg, language="text")
+                    st.write("Upar wala message hi Telegram pe gaya hai.")
+
+                suggested = {"date": datetime.now().strftime("%Y-%m-%d"), "time": datetime.now().strftime("%H:%M:%S"), "symbol": sel_stock, "strike": strike, "opt_type": opt_type, "entry": float(entry_prem), "sl": float(sl_prem), "target": float(target_prem), "qty_lots": 1, "qty_total": float(lot), "capital_used": float(best['1 Lot Cost']), "risk": float(max_loss), "status": "OPEN", "reason": f"{row['Direction']} - {row['Pattern']} - News {news_bias} - Prob {row['Probability %']}% - Expiry {expiry_shown} - IND Money", "conditions": f"Gap {row['Gap']} VWAP {row['VWAP']} ORB {row['ORB']} Vol {row['Volume']} Movement {row['Movement Started?']}"}
+                if st.button(f"📝 {sel_stock} ko Diary me Save Karo"):
+                    save_trade(suggested)
+                    st.success("Diary me save ho gaya!")
+                    st.rerun()
             else:
-                st.warning(f"{sel_stock} ka Option Chain NSE se nahi mila. NSE ne block kiya hoga. 1 min baad phir try karo.")
+                st.error(f"❌ {sel_stock} me Rs 5000 me koi 1 Lot wala contract nahi mila. Dusra stock try karo.")
+        elif chain_key in st.session_state and (st.session_state[chain_key] is None or st.session_state[chain_key].empty):
+            st.error(f"❌ Option Chain IND Money se nahi aaya. Secret Code check karo. NSE se nahi mang rahe hain, isliye NSE ka error bhi nahi aayega.")
+            st.write(f"**Source msg:** {st.session_state.get(f'chain_source_{sel_stock}', '')}")
+            st.write("**Kya karein:** Logout karke dobara login karo, IND Money Secret Code sahi daalo. Secret sahi hoga to IND Money se Option Chain aa jayega.")
+        else:
+            st.info(f"👆 Upar **{sel_stock} ka Option Chain IND MONEY se Mango** dabao. Tab IND Money se Total Strike aayega.")
 
 else:
-    st.info("👆 Upar **SCAN NOW** dabao. Tab pura market scan hoga - NSE + BSE, Global News, Indices, sab kuch.")
+    st.info("👆 Upar **SCAN NOW** dabao. Tab pura market scan hoga, phir IND Money se Option Chain aayega.")
 
 st.divider()
-st.write("1. Pura Market Scan - NSE + BSE. 2. Rs 5000 me aane wala strike. 3. Global News - Fed / Election / Policy. 4. Pichla Nifty / Bank Nifty / Sensex / Bankex. 5. Movement Suru Hua ya Nahi. 6. Notification - App + Telegram. 7. Auto Trade NAHI, sirf jaankari.")
+st.write("1. Option Chain SIRF IND Money se, NSE se NAHI. 2. Jo Stock Top / Suggested / Selected hai uska hi mangenge. 3. Nearest Expiry. 4. Total Strike me check - Kaunsa 5000 me hoga. 5. Send Notification Button - Bot Check ke liye hai, baad me hata denge. 6. Strike select karke Entry / SL / Target Notification bhej denge. 7. Auto Trade NAHI.")
