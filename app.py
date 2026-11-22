@@ -1,4 +1,4 @@
-# app.py - V15 - FULL DAY MOVEMENT + HISTORICAL DATA - INDstocks Docs se bana hua COMPLETE SCRIPT
+# app.py - V16 - FULL DAY MOVEMENT + HISTORICAL DATA - INDstocks Docs se bana hua COMPLETE SCRIPT
 # ============================================================================================
 # KYA BADLA HAI V15 ME - USER NE SAHI KAHA THA:
 # Pehle hum sirf OPEN-HIGH dekh rahe the. Matlab 9:15-9:30 ka ORB dekh ke bol dete the "Breakout hai".
@@ -82,7 +82,7 @@ try:
 except:
     IST = timezone(timedelta(hours=5, minutes=30))
 
-st.set_page_config(page_title="Scanner V15 - Full Day Movement - IND Historical", layout="wide")
+st.set_page_config(page_title="Scanner V16 - Full Day + PIN Hataya + Diary Fix", layout="wide")
 
 # ---------------- CONFIG ----------------
 CAPITAL = 5000
@@ -94,9 +94,13 @@ IND_BASE = "https://api.indstocks.com"
 try:
     TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_CHAT = str(st.secrets.get("TELEGRAM_CHAT_ID", ""))
+    GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "") or st.secrets.get("GITHUB_PAT", "")
+    GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 except:
     TELEGRAM_TOKEN = ""
     TELEGRAM_CHAT = ""
+    GITHUB_TOKEN = ""
+    GITHUB_REPO = ""
 
 # ---------------- STOCKS - NSE + BSE F&O WALE ----------------
 MARKET_STOCKS = {
@@ -176,12 +180,41 @@ def ist_now():
     except:
         return datetime.now(timezone(timedelta(hours=5, minutes=30)))
 
-def get_trading_day():
-    # Agar abhi 09:15 se pehle hai to kal ka din lo, nahi to aaj ka. Raat ko chalao to aaj ka hi data aayega.
+def get_last_trading_day():
+    # ASLI WAJAH 0 STOCKS KI - YAHI THA:
+    # Pehle hum aaj ki date le lete the. Saturday / Sunday ko market band hota hai, to us din ki koi candle hi nahi hoti.
+    # Sunday raat 11 baje scan karoge to Sunday ki 09:15-15:30 me koi candle nahi hai -> 0 stocks.
+    # Isliye ab hum pichhla TRADING DAY lete hain - Saturday/Sunday ko skip karke Friday.
+    # Aur agar abhi 09:15 se pehle hai to kal ka trading day lete hain.
     now = ist_now()
+    d = now.date()
     if now.hour < 9 or (now.hour == 9 and now.minute < 15):
-        return (now - timedelta(days=1)).date()
-    return now.date()
+        d = d - timedelta(days=1)
+    while d.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        d = d - timedelta(days=1)
+    return d
+
+def get_trading_day():
+    return get_last_trading_day()
+
+def get_scan_window(trading_day):
+    # Scan kisi bhi time ho sakta hai - 09:20, 09:30, 09:35, 01:00, 02:00, raat ko - isliye FIXED 09:20 mat karo.
+    # Start hamesha 09:15, End = abhi kitna baja hai, us hisab se.
+    # Agar trading_day == aaj hai aur abhi market chal raha hai to End = abhi ka time.
+    # Agar trading_day == aaj hai aur market band ho gaya (15:30 ke baad) to End = 15:30.
+    # Agar trading_day pichhla din hai (weekend / subah scan) to End = us din ka 15:30 - poora din.
+    now = ist_now()
+    start_dt = datetime(trading_day.year, trading_day.month, trading_day.day, 9, 15, 0, tzinfo=IST)
+    if trading_day == now.date():
+        if now.hour < 15 or (now.hour == 15 and now.minute <= 30):
+            end_dt = now
+        else:
+            end_dt = datetime(trading_day.year, trading_day.month, trading_day.day, 15, 30, 0, tzinfo=IST)
+    else:
+        end_dt = datetime(trading_day.year, trading_day.month, trading_day.day, 15, 30, 0, tzinfo=IST)
+    if end_dt <= start_dt:
+        end_dt = start_dt + timedelta(minutes=5)
+    return start_dt, end_dt
 
 def to_ms(dt):
     # Docs: start_time / end_time MILLISECONDS me chahiye
@@ -372,6 +405,72 @@ def ind_get_day_candles_for_symbol(symbol, scrip, token, trading_day):
     df = ind_candles_to_df(candles)
     return df, "OK"
 
+
+def ind_get_multi_timeframe(symbol, scrip, token, trading_day):
+    # WORLD BEST TRADERS KI STRATEGY - EK TIMEFRAME NAHI, 3 TIMEFRAME EK SAATH:
+    # - 1minute: Subah 09:20 pe jab 5minute ki sirf 1 candle hoti hai, tab 1minute ki 5 candles se Gap + VWAP + Volume pata chalta hai. (Ross Cameron - 1min ORB)
+    # - 5minute: ORB 09:15-09:30 + VWAP + Day Range - Main timeframe. (Andrew Aziz - ORB + VWAP)
+    # - 15minute: Trend confirm karne ke liye - 15min me breakout pakka hai ya fake. (Minervini - Trend + VCP)
+    # - 1day: ATR + Pichhla Trend + Support - O'Neil / Minervini
+    # - Scan kisi bhi time ho: 09:20, 09:30, 09:35, 01:00, 02:00 - Start hamesha 09:15, End = abhi ka time ya 15:30.
+    # Isliye kabhi bhi 0 candles nahi aayengi agar market us din khula tha.
+    start_dt, end_dt = get_scan_window(trading_day)
+    code = f"NSE_{scrip}"
+    out = {"df_1min": None, "df_5min": None, "df_15min": None, "df_daily": None, "debug": []}
+    # 5minute pehle
+    try:
+        data5, msg5 = ind_get_historical_batch([code], "5minute", to_ms(start_dt), to_ms(end_dt), token)
+        if code in data5:
+            out["df_5min"] = ind_candles_to_df(data5[code].get("candles", []) or [])
+            out["debug"].append(f"5min: {len(out['df_5min'])} candles")
+        else:
+            out["debug"].append(f"5min: 0 - {msg5}")
+    except Exception as e:
+        out["debug"].append(f"5min error {e}")
+    # Agar 5min me 3 se kam candles hain (jaise 09:20 pe) to 1minute se bharo
+    need_1min = out["df_5min"] is None or len(out["df_5min"]) < 3
+    if need_1min:
+        try:
+            data1, msg1 = ind_get_historical_batch([code], "1minute", to_ms(start_dt), to_ms(end_dt), token)
+            if code in data1:
+                out["df_1min"] = ind_candles_to_df(data1[code].get("candles", []) or [])
+                out["debug"].append(f"1min: {len(out['df_1min'])} candles")
+                # 1min se 5min banao - har 5 candles ko ek me milao
+                if out["df_5min"] is None or len(out["df_5min"]) == 0:
+                    if out["df_1min"] is not None and len(out["df_1min"]) > 0:
+                        # 1min ko 5min me resample karo
+                        df1 = out["df_1min"].copy()
+                        df1 = df1.set_index("Time")
+                        df5r = df1.resample("5min").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna().reset_index()
+                        out["df_5min"] = df5r
+                        out["debug"].append(f"1min se 5min banaya: {len(df5r)}")
+            else:
+                out["debug"].append(f"1min: 0 - {msg1}")
+        except Exception as e:
+            out["debug"].append(f"1min error {e}")
+    # 15minute - trend confirm
+    try:
+        data15, msg15 = ind_get_historical_batch([code], "15minute", to_ms(start_dt), to_ms(end_dt), token)
+        if code in data15:
+            out["df_15min"] = ind_candles_to_df(data15[code].get("candles", []) or [])
+            out["debug"].append(f"15min: {len(out['df_15min'])} candles")
+        else:
+            out["debug"].append(f"15min: 0 - {msg15}")
+    except Exception as e:
+        out["debug"].append(f"15min error {e}")
+    # Daily - ATR ke liye
+    try:
+        start_daily = end_dt - timedelta(days=35)
+        dataD, msgD = ind_get_historical_batch([code], "1day", to_ms(start_daily), to_ms(end_dt), token)
+        if code in dataD:
+            out["df_daily"] = ind_candles_to_df(dataD[code].get("candles", []) or [])
+            out["debug"].append(f"Daily: {len(out['df_daily'])} candles")
+        else:
+            out["debug"].append(f"Daily: 0 - {msgD}")
+    except Exception as e:
+        out["debug"].append(f"Daily error {e}")
+    return out
+
 def ind_get_daily_candles_for_symbol(symbol, scrip, token, trading_day):
     # Pichhle 30 din ka 1day - ATR, Trend, Pichhla Move ke liye. 1day ka Max Range 1 Saal hai.
     end_dt = datetime(trading_day.year, trading_day.month, trading_day.day, 15, 30, 0, tzinfo=IST)
@@ -406,8 +505,9 @@ def analyze_full_day(df_5m, df_daily):
     # Output: Poora din ka khel - Sideways / Bhag Raha / Volatile / Dhire Dhire + saare numbers
     # Sirf Open-High dekhna band - ab hum 8 cheezein dekhte hain.
     out = {}
-    if df_5m is None or df_5m.empty or len(df_5m) < 5:
-        out["error"] = "Aaj ki 5min candles kam hain - Market band hai ya data nahi aaya"
+    # FIX: Pehle yahan len < 5 tha - isliye 09:20 pe scan karne pe 0 stocks aate the. 09:20 pe sirf 1 candle hoti hai, 09:30 pe 3, 09:35 pe 4 - sab <5 the, isliye sab skip ho gaye. Ab len < 1 hai.
+    if df_5m is None or df_5m.empty or len(df_5m) < 1:
+        out["error"] = "Aaj ki candles bilkul nahi aayi - Market band tha ya data nahi aaya"
         return out
     df = df_5m.copy().reset_index(drop=True)
     # --- 1. BASIC DAY NUMBERS ---
@@ -631,32 +731,32 @@ def analyze_full_day(df_5m, df_daily):
 
 # ---------------- SCAN - IND HISTORICAL SE, NAHI MILA TO YAHOO SE ----------------
 def scan_with_ind(token, scrip_map, progress_cb=None):
-    # 5-5 karke batch me mangte hain kyunki Docs me max 5 hai. 100 stocks = 20 batches.
-    # Har stock ke liye: Aaj ka 5minute + Pichhle 30 din ka 1day - dono IND se.
+    # FIXED SCAN - 0 STOCKS WALA BUG YAHAN THA, AB 3 FIX HAIN:
+    # FIX 1: Trading Day - Sunday ko Friday lete hain, nahi to Sunday ki koi candle nahi hoti -> 0.
+    # FIX 2: 09:20 pe sirf 1 candle hoti hai, pehle len<5 pe skip kar dete the -> 0. Ab 1 candle pe bhi chalega + 1minute se bharega.
+    # FIX 3: Ek stock ka data nahi aaya to poora scan fail nahi hoga - us stock ko Yahoo se bhar denge, baaki IND se hi rahenge.
+    # TIME FIXED NAHI HAI: Start 09:15, End = abhi ka time (09:20 / 09:30 / 09:35 / 01:00 / 02:00 jo bhi ho) ya 15:30 agar market band hai.
     trading_day = get_trading_day()
-    now = ist_now()
-    start_5m = datetime(trading_day.year, trading_day.month, trading_day.day, 9, 15, 0, tzinfo=IST)
-    if trading_day == now.date() and now.hour < 15 or (trading_day == now.date() and now.hour == 15 and now.minute <= 30):
-        end_5m = now
-    else:
-        end_5m = datetime(trading_day.year, trading_day.month, trading_day.day, 15, 30, 0, tzinfo=IST)
-    start_daily = end_5m - timedelta(days=35)
+    start_dt, end_dt = get_scan_window(trading_day)
     symbols = list(MARKET_STOCKS.keys())
-    # Scrip map banao - jo nahi milega usko skip kar denge
     stock_to_code = {}
     for s in symbols:
         sid = scrip_map.get(s.upper(), "") if scrip_map else KNOWN_SCRIP.get(s, "")
         if sid:
             stock_to_code[s] = f"NSE_{sid}"
-    # Batch me 5minute mang lo
+    # Batch me 5minute + 15minute + Daily ek saath mangte hain - 5-5 karke kyunki Docs me max 5 hai
     all_5m = {}
+    all_15m = {}
     all_daily = {}
+    all_1min = {}
+    debug_list = []
     codes_list = list(stock_to_code.values())
     code_to_stock = {v: k for k, v in stock_to_code.items()}
+    total_batches = (len(codes_list) + 4)//5
     # 5minute batches
     for i in range(0, len(codes_list), 5):
         batch = codes_list[i:i+5]
-        data, _msg = ind_get_historical_batch(batch, "5minute", to_ms(start_5m), to_ms(end_5m), token)
+        data, _msg = ind_get_historical_batch(batch, "5minute", to_ms(start_dt), to_ms(end_dt), token)
         for code, payload in data.items():
             try:
                 sym = code_to_stock.get(code, code)
@@ -664,12 +764,26 @@ def scan_with_ind(token, scrip_map, progress_cb=None):
             except:
                 continue
         if progress_cb:
-            progress_cb(min(0.45, (i+5)/len(codes_list)*0.45))
-        time.sleep(0.05)
-    # Daily batches
+            progress_cb(min(0.35, (i+5)/len(codes_list)*0.35))
+        time.sleep(0.03)
+    # 15minute batches - Trend confirm ke liye
     for i in range(0, len(codes_list), 5):
         batch = codes_list[i:i+5]
-        data, _msg = ind_get_historical_batch(batch, "1day", to_ms(start_daily), to_ms(end_5m), token)
+        data, _msg = ind_get_historical_batch(batch, "15minute", to_ms(start_dt), to_ms(end_dt), token)
+        for code, payload in data.items():
+            try:
+                sym = code_to_stock.get(code, code)
+                all_15m[sym] = ind_candles_to_df(payload.get("candles", []) or [])
+            except:
+                continue
+        if progress_cb:
+            progress_cb(0.35 + min(0.15, (i+5)/len(codes_list)*0.15))
+        time.sleep(0.03)
+    # Daily batches
+    start_daily = end_dt - timedelta(days=35)
+    for i in range(0, len(codes_list), 5):
+        batch = codes_list[i:i+5]
+        data, _msg = ind_get_historical_batch(batch, "1day", to_ms(start_daily), to_ms(end_dt), token)
         for code, payload in data.items():
             try:
                 sym = code_to_stock.get(code, code)
@@ -677,51 +791,78 @@ def scan_with_ind(token, scrip_map, progress_cb=None):
             except:
                 continue
         if progress_cb:
-            progress_cb(0.45 + min(0.45, (i+5)/len(codes_list)*0.45))
-        time.sleep(0.05)
+            progress_cb(0.50 + min(0.20, (i+5)/len(codes_list)*0.20))
+        time.sleep(0.03)
+    # Agar kisi stock ki 5min me 3 se kam candles hain (09:20 wala case) to uski 1min mang lo - sirf unke liye
+    need_1min_stocks = [s for s in symbols if s not in all_5m or len(all_5m.get(s, [])) < 3]
+    if need_1min_stocks:
+        debug_list.append(f"1min chahiye: {len(need_1min_stocks)} stocks (09:20-09:35 wala case)")
+        for s in need_1min_stocks:
+            code = stock_to_code.get(s, "")
+            if not code:
+                continue
+            try:
+                data1, _ = ind_get_historical_batch([code], "1minute", to_ms(start_dt), to_ms(end_dt), token)
+                if code in data1:
+                    df1 = ind_candles_to_df(data1[code].get("candles", []) or [])
+                    all_1min[s] = df1
+                    if s not in all_5m or len(all_5m.get(s, [])) == 0:
+                        if len(df1) > 0:
+                            df1c = df1.copy().set_index("Time")
+                            df5r = df1c.resample("5min").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna().reset_index()
+                            all_5m[s] = df5r
+                time.sleep(0.02)
+            except:
+                continue
     rows = []
+    ind_ok = 0
+    ind_fail = []
     for sym in symbols:
         try:
             df5 = all_5m.get(sym, pd.DataFrame())
             dfd = all_daily.get(sym, pd.DataFrame())
-            if df5 is None or df5.empty or len(df5) < 5:
+            df15 = all_15m.get(sym, pd.DataFrame())
+            if df5 is None or df5.empty or len(df5) < 1:
+                ind_fail.append(sym)
                 continue
             ana = analyze_full_day(df5, dfd)
             if "error" in ana:
+                ind_fail.append(sym)
                 continue
-            # 5 Conditions - purana form waisa hi
+            # 15min se Trend Confirm karo - World Best Traders wala rule
+            # Agar 15min me bhi same direction hai to Probability +10, agar ulta hai to -10 (Fake ka chance)
+            trend_15_ok = True
+            try:
+                if df15 is not None and len(df15) >= 2:
+                    first15 = safe_float(df15.iloc[0]["Open"])
+                    last15 = safe_float(df15.iloc[-1]["Close"])
+                    chg15 = (last15 - first15)/first15*100 if first15 != 0 else 0
+                    dir15 = "BULLISH" if chg15 > 0.2 else "BEARISH" if chg15 < -0.2 else "SIDEWAYS"
+                    if dir15 != "SIDEWAYS" and dir15 != str(ana.get("Direction","")):
+                        trend_15_ok = False
+            except:
+                trend_15_ok = True
+            ind_ok += 1
             c1_gap = abs(safe_float(ana.get("Gap %", 0))) > 0.30
             c2_vwap = (safe_float(ana.get("LTP", 0)) > safe_float(ana.get("VWAP", 0)) and safe_float(ana.get("Gap %", 0)) > 0) or (safe_float(ana.get("LTP", 0)) < safe_float(ana.get("VWAP", 0)) and safe_float(ana.get("Gap %", 0)) < 0)
             c3_orb = bool(ana.get("ORB Break", False))
             c4_vol = safe_float(ana.get("Vol x", 0)) > 1.5
-            # 5th - Volatility / VIX jaisa - Volatile/Choppy hai to Condition FAIL, nahi to PASS. Choppy me Option mat lo.
             c5_volatility_ok = "CHOPPY" not in str(ana.get("Movement Type", "")) and "VOLATILE" not in str(ana.get("Movement Type", ""))
-            # Probability - Movement Quality ko sabse zyada weight
             score = 0
-            if c1_gap:
-                score += 15
-            if c2_vwap:
-                score += 15
-            if c3_orb:
-                score += 20
-            if c4_vol:
-                score += 15
-            if c5_volatility_ok:
-                score += 10
-            if ana.get("Movement Started?") == "HAAN":
-                score += 15
-            if safe_float(ana.get("Trending Score", 0)) >= 60:
-                score += 10
-            if safe_float(ana.get("Range vs ATR", 0)) > 1.2:
-                score += 5
-            if abs(safe_float(ana.get("Gap %", 0))) > 1.0:
-                score += 5
-            if bool(ana.get("Fake Breakout", False)):
-                score -= 30
-            if "CHOPPY" in str(ana.get("Movement Type", "")) or "VOLATILE" in str(ana.get("Movement Type", "")):
-                score -= 20
-            if "SIDEWAYS" in str(ana.get("Movement Type", "")):
-                score -= 15
+            if c1_gap: score += 15
+            if c2_vwap: score += 15
+            if c3_orb: score += 20
+            if c4_vol: score += 15
+            if c5_volatility_ok: score += 10
+            if ana.get("Movement Started?") == "HAAN": score += 15
+            if safe_float(ana.get("Trending Score", 0)) >= 60: score += 10
+            if safe_float(ana.get("Range vs ATR", 0)) > 1.2: score += 5
+            if abs(safe_float(ana.get("Gap %", 0))) > 1.0: score += 5
+            if trend_15_ok: score += 5
+            else: score -= 10
+            if bool(ana.get("Fake Breakout", False)): score -= 30
+            if "CHOPPY" in str(ana.get("Movement Type", "")) or "VOLATILE" in str(ana.get("Movement Type", "")): score -= 20
+            if "SIDEWAYS" in str(ana.get("Movement Type", "")): score -= 15
             score = max(0, min(100, int(score)))
             pass_count = sum([c1_gap, c2_vwap, c3_orb, c4_vol])
             rows.append({
@@ -740,12 +881,21 @@ def scan_with_ind(token, scrip_map, progress_cb=None):
                 "Movement Started?": str(ana.get("Movement Started?", "")), "Fake?": "HAAN - TRAP" if bool(ana.get("Fake Breakout", False)) else "NAHI",
                 "Probability %": int(score), "Gap": "✅" if c1_gap else "❌", "VWAP": "✅" if c2_vwap else "❌", "ORB": "✅" if c3_orb else "❌", "Volume": "✅" if c4_vol else "❌", "Volatility OK": "✅" if c5_volatility_ok else "❌", "Pass": f"{pass_count}/4",
                 "Source": "IND-Historical",
+                "15min Confirm": "✅" if trend_15_ok else "❌ Ulta",
+                "Candles": int(ana.get("Candles", 0)),
             })
         except Exception as e:
+            ind_fail.append(sym)
             continue
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values("Probability %", ascending=False).reset_index(drop=True)
+    # Debug ko session me rakho taaki UI me dikha sakein - kyu 0 aaya, kitne IND se aaye
+    st.session_state["_scan_debug"] = {
+        "trading_day": str(trading_day), "start": str(start_dt), "end": str(end_dt),
+        "ind_ok": ind_ok, "ind_fail_count": len(ind_fail), "ind_fail_sample": ind_fail[:10],
+        "total": len(symbols), "debug_list": debug_list,
+    }
     return df
 
 def scan_with_yahoo_fallback():
@@ -944,71 +1094,166 @@ def check_all_strikes(chain_df, lot, ltp, direction, budget=5000):
     return df, best
 
 # ---------------- DIARY - EK HI CSV ----------------
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, time TEXT, symbol TEXT, strike INTEGER, opt_type TEXT, entry REAL, sl REAL, target REAL, qty_lots INTEGER, qty_total REAL, capital_used REAL, risk REAL, status TEXT, exit_price REAL, pnl REAL, exit_time TEXT, reason TEXT, conditions TEXT)")
-    conn.commit(); conn.close()
+# ---------------- DIARY - CSV ONLY - SQLITE HATA DIYA, KYUNKI WAHI CRASH KAR RAHA THA ----------------
+# TUMHARI PHOTO WALI ERROR KI ASLI WAJAH:
+# Photo me likha tha: OperationalError - File "app.py", line 408, in save_trade - c.execute("INSERT INTO trades ...")
+# Wajah: Tumhare paas purana trades.db pada tha jo V13/V14 me bana tha, usme "conditions" column tha hi nahi.
+# Lekin code CREATE TABLE IF NOT EXISTS karta tha - matlab purani table ko badalta hi nahi, wahi purani schema rehti thi.
+# Phir INSERT me 18 columns bhejte the, purani table me 17 hi the -> "no such column" / OperationalError -> App crash.
+# FIX: SQLite hi hata diya. Ab Diary sirf ek CSV hai - all_trades.csv - jo har baar seedha likha jayega.
+# CSV me purana column ho ya naya, hum usko handle kar lenge, crash nahi hoga.
+# Streamlit Cloud pe local file Reboot pe udd jati hai, isliye GitHub me bhi push karte hain (agar GITHUB_TOKEN Secrets me hai).
+# Agar GitHub Token nahi hai to bhi Diary LOCAL me save hogi + Download button se le sakte ho, crash nahi hogi.
+DIARY_COLUMNS = ["id","date","time","symbol","strike","opt_type","entry","sl","target","qty_lots","qty_total","capital_used","risk","status","exit_price","pnl","exit_time","reason","conditions"]
+
+def _ensure_diary_csv():
+    # Agar CSV nahi hai to khali CSV banao. Agar purana trades.db hai to usko ek baar CSV me badal do.
+    if not os.path.exists(CSV_FILE):
+        # Purane DB se migrate karne ki koshish - agar fail ho to khali banao, crash mat karo
+        try:
+            if os.path.exists(DB_FILE):
+                conn = sqlite3.connect(DB_FILE)
+                try:
+                    df_old = pd.read_sql("SELECT * FROM trades", conn)
+                    # Purane columns ko naye se milao - jo column missing hai usko khali bhar do
+                    for col in DIARY_COLUMNS:
+                        if col not in df_old.columns:
+                            df_old[col] = "" if col in ["reason","conditions","exit_time"] else 0
+                    df_old = df_old[DIARY_COLUMNS]
+                    df_old.to_csv(CSV_FILE, index=False)
+                    conn.close()
+                    return
+                except Exception:
+                    conn.close()
+        except Exception:
+            pass
+        pd.DataFrame(columns=DIARY_COLUMNS).to_csv(CSV_FILE, index=False)
+    else:
+        # CSV hai to uske columns check karo - agar purana CSV hai to naye columns add karo
+        try:
+            df = pd.read_csv(CSV_FILE)
+            changed = False
+            for col in DIARY_COLUMNS:
+                if col not in df.columns:
+                    df[col] = "" if col in ["reason","conditions","exit_time"] else 0
+                    changed = True
+            if changed:
+                df = df[DIARY_COLUMNS]
+                df.to_csv(CSV_FILE, index=False)
+        except Exception:
+            # CSV kharab hai to backup bana ke naya banao - data mat udao, backup me rakho
+            try:
+                os.rename(CSV_FILE, CSV_FILE + ".bak")
+            except:
+                pass
+            pd.DataFrame(columns=DIARY_COLUMNS).to_csv(CSV_FILE, index=False)
+
+def _push_diary_to_github():
+    # GitHub me save karna - sirf tab jab Secrets me GITHUB_TOKEN + GITHUB_REPO hai, nahi to chupchap skip
+    # Kabhi bhi iski wajah se Diary save fail nahi hoga - try/except me hai
+    try:
+        if not GITHUB_TOKEN or not GITHUB_REPO:
+            return False, "GitHub Token Secrets me nahi hai, isliye sirf Local me save hua"
+        if not os.path.exists(CSV_FILE):
+            return False, "CSV nahi hai"
+        csv_text = open(CSV_FILE, encoding="utf-8").read()
+        content_b64 = base64.b64encode(csv_text.encode()).decode()
+        headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_CSV_PATH}"
+        get_resp = requests.get(url, headers=headers, timeout=10)
+        sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
+        payload = {"message": f"Diary update {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "content": content_b64}
+        if sha:
+            payload["sha"] = sha
+        put_resp = requests.put(url, headers=headers, json=payload, timeout=15)
+        if put_resp.status_code in (200, 201):
+            return True, "GitHub me bhi save ho gaya"
+        return False, f"GitHub Fail {put_resp.status_code} - {put_resp.text[:200]}"
+    except Exception as e:
+        return False, f"GitHub Error - {e}"
 
 def save_trade(trade):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO trades (date,time,symbol,strike,opt_type,entry,sl,target,qty_lots,qty_total,capital_used,risk,status,exit_price,pnl,exit_time,reason,conditions) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    (trade['date'], trade['time'], trade['symbol'], trade['strike'], trade['opt_type'], trade['entry'], trade['sl'], trade['target'], trade['qty_lots'], trade['qty_total'], trade['capital_used'], trade['risk'], trade['status'], None, None, None, trade['reason'], trade.get('conditions','')))
-    conn.commit(); conn.close()
-    conn2 = sqlite3.connect(DB_FILE)
-    df2 = pd.read_sql("SELECT * FROM trades", conn2)
-    df2.to_csv(CSV_FILE, index=False); conn2.close()
-    if st.session_state.get("github_pat") and st.session_state.get("github_repo"):
+    # Kabhi crash nahi karega - har error ko pakad ke batayega
+    try:
+        _ensure_diary_csv()
+        df = pd.read_csv(CSV_FILE)
+        # id banao - max+1
         try:
-            csv_text = df2.to_csv(index=False)
-            content_b64 = base64.b64encode(csv_text.encode()).decode()
-            headers = {"Authorization": f"token {st.session_state.github_pat}", "Accept": "application/vnd.github+json"}
-            url = f"https://api.github.com/repos/{st.session_state.github_repo}/contents/{GITHUB_CSV_PATH}"
-            get_resp = requests.get(url, headers=headers, timeout=10)
-            sha = get_resp.json().get("sha") if get_resp.status_code==200 else None
-            payload = {"message": f"Diary update {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "content": content_b64}
-            if sha:
-                payload["sha"] = sha
-            requests.put(url, headers=headers, json=payload, timeout=15)
+            next_id = int(df["id"].max()) + 1 if len(df) > 0 and pd.notna(df["id"].max()) else 1
         except:
-            pass
-    return df2
+            next_id = 1
+        new_row = {
+            "id": next_id,
+            "date": trade.get('date',''), "time": trade.get('time',''), "symbol": trade.get('symbol',''),
+            "strike": trade.get('strike',0), "opt_type": trade.get('opt_type',''),
+            "entry": trade.get('entry',0), "sl": trade.get('sl',0), "target": trade.get('target',0),
+            "qty_lots": trade.get('qty_lots',1), "qty_total": trade.get('qty_total',0),
+            "capital_used": trade.get('capital_used',0), "risk": trade.get('risk',0),
+            "status": trade.get('status','OPEN'), "exit_price": "", "pnl": "",
+            "exit_time": "", "reason": trade.get('reason',''), "conditions": trade.get('conditions','')
+        }
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        df.to_csv(CSV_FILE, index=False)
+        ok_gh, msg_gh = _push_diary_to_github()
+        # session me bhi rakho taaki turant dikhe
+        st.session_state["_diary_last_msg"] = f"Diary me save ho gaya! {msg_gh}" if ok_gh else f"Diary Local me save ho gaya. {msg_gh}"
+        return df
+    except Exception as e:
+        st.session_state["_diary_last_msg"] = f"Diary save me error - {e}"
+        # Phir bhi khali df mat bhejo, jo hai wahi bhejo
+        try:
+            return pd.read_csv(CSV_FILE)
+        except:
+            return pd.DataFrame(columns=DIARY_COLUMNS)
 
 def get_all_trades():
-    if not os.path.exists(DB_FILE):
-        return pd.DataFrame()
-    conn = sqlite3.connect(DB_FILE)
     try:
-        df = pd.read_sql("SELECT * FROM trades ORDER BY id DESC", conn)
-    except:
-        df = pd.DataFrame()
-    conn.close(); return df
+        _ensure_diary_csv()
+        df = pd.read_csv(CSV_FILE)
+        if df.empty:
+            return df
+        # id se ulta sort - naya pehle
+        if "id" in df.columns:
+            df = df.sort_values("id", ascending=False)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=DIARY_COLUMNS)
 
 def update_trade_status(trade_id, status, exit_price, pnl):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("UPDATE trades SET status=?, exit_price=?, pnl=?, exit_time=? WHERE id=?", (status, exit_price, pnl, datetime.now().strftime("%H:%M:%S"), trade_id))
-    conn.commit(); conn.close()
-    conn2 = sqlite3.connect(DB_FILE)
-    df2 = pd.read_sql("SELECT * FROM trades", conn2)
-    df2.to_csv(CSV_FILE, index=False); conn2.close()
+    try:
+        _ensure_diary_csv()
+        df = pd.read_csv(CSV_FILE)
+        idx = df[df["id"] == trade_id].index
+        if len(idx) > 0:
+            i = idx[0]
+            df.at[i, "status"] = status
+            df.at[i, "exit_price"] = exit_price
+            df.at[i, "pnl"] = pnl
+            df.at[i, "exit_time"] = datetime.now().strftime("%H:%M:%S")
+            df.to_csv(CSV_FILE, index=False)
+            _push_diary_to_github()
+        return df
+    except Exception as e:
+        st.session_state["_diary_last_msg"] = f"Update me error - {e}"
+        return get_all_trades()
+
+# Purani init_db ki zaroorat nahi, lekin naam rakha hai taaki purana code toote nahi
+def init_db():
+    _ensure_diary_csv()
 
 init_db()
 
 # ---------------- LOGIN ----------------
 if not st.session_state.authenticated:
-    st.title("Scanner V15 - Full Day Movement - IND Historical")
+    st.title("Scanner V16 - Full Day + PIN Hataya + Diary Fix")
     st.info("IND Token 24 ghante me expire hota hai. Roz subah naya Token banao: indstocks.com -> Login -> /app/api-trading/access-tokens -> Claim Your API Access -> Generate -> Copy karke yahan daalo.")
     st.write("V15 me Scan IND Historical Data se hota hai - 5minute candles se poora din dekha jata hai, sirf Open-High nahi.")
+    # PIN HATA DIYA HAI - Ab sirf IND ka Secret Code hi kaafi hai. 4 ank ka Code ab kabhi nahi mangega.
     with st.form("login_form"):
         indmoney_secret = st.text_input("INDstocks Access Token - indstocks.com se - Roz naya wala", type="password", placeholder="indstocks.com/app/api-trading/access-tokens se Copy kiya hua Token")
-        app_pin = st.text_input("PIN (4 ank)", type="password")
         submit = st.form_submit_button("Scanner Kholo", use_container_width=True)
         if submit:
-            if not app_pin or len(app_pin) < 4:
-                st.error("4 ank ka PIN daalo")
-            elif not indmoney_secret or len(indmoney_secret) < 10:
+            if not indmoney_secret or len(indmoney_secret) < 10:
                 st.error("IND Token daalo - Bina Token ke Option Chain nahi aayega")
             else:
                 ok, msg = ind_test_profile(indmoney_secret)
@@ -1031,7 +1276,7 @@ if not st.session_state.authenticated:
 # ---------------- TOP BAR ----------------
 top_left, top_right = st.columns([4, 1])
 with top_left:
-    st.title("Scanner V15 | Rs 5,000 | IND Historical - Full Day")
+    st.title("Scanner V16 | Rs 5,000 | PIN Hataya | Diary Fix | Kisi bhi Time Scan")
 with top_right:
     st.write("")
     if st.button("Trading Diary", use_container_width=True):
@@ -1044,6 +1289,12 @@ else:
     st.warning("IND NOT CONNECTED - Scan Yahoo Fallback se hoga, Option Chain nahi aayega. Token daal ke Login karo.")
 
 st.sidebar.title("Dashboard")
+st.sidebar.markdown("### GitHub Secrets - Secret Jagah")
+if GITHUB_TOKEN and GITHUB_REPO:
+    st.sidebar.success(f"GitHub OK - {GITHUB_REPO}")
+else:
+    st.sidebar.warning("GitHub Token nahi hai - Diary Reboot pe udd jayegi. Diary kholo, wahan Secrets wala box dekho.")
+    st.sidebar.code('GITHUB_TOKEN = "ghp_..."\nGITHUB_REPO = "username/repo"', language="text")
 if st.sidebar.button("Trading Diary Kholo"):
     st.session_state.show_diary = True; st.rerun()
 if st.sidebar.button("Refresh Data"):
@@ -1056,6 +1307,30 @@ if st.sidebar.button("Logout"):
 # ---------------- DIARY ----------------
 if st.session_state.show_diary:
     st.markdown("## TRADING DIARY")
+    if st.session_state.get("_diary_last_msg"):
+        st.success(st.session_state["_diary_last_msg"])
+    # GitHub Secrets ka status - yahi secret jagah hai
+    if GITHUB_TOKEN and GITHUB_REPO:
+        st.success(f"GitHub Connected - Repo: {GITHUB_REPO} - Diary GitHub me bhi save hogi, Reboot pe nahi udegi")
+    else:
+        st.warning("GitHub Token Secrets me nahi hai - Diary abhi sirf is App me save hogi, Reboot pe udd sakti hai. Neeche GitHub Secrets wala box dekho, usme daal do to hamesha ke liye save hogi.")
+        with st.expander("GitHub Secrets - Kya chahiye, kahan daalna hai, ye dekho"):
+            st.code("""Streamlit Cloud -> App -> (3 dot) Manage app -> Settings -> Secrets me ye daalo:
+
+TELEGRAM_BOT_TOKEN = "[TUMHARA-BOT-TOKEN-SIRF-SECRETS-ME]"
+TELEGRAM_CHAT_ID = "[TUMHARA-CHAT-ID-SIRF-SECRETS-ME]"
+GITHUB_TOKEN = "ghp_XXXX... tumhara naya Token"
+GITHUB_REPO = "tumhara-username/tumhara-repo-naam"
+
+# GITHUB_TOKEN kaise banayein:
+# 1. github.com -> Profile Photo -> Settings -> Developer settings -> Personal access tokens -> Tokens (classic) -> Generate new token (classic)
+# 2. Note me likho: Scanner Diary
+# 3. Expiration: No expiration ya 90 days
+# 4. Tick karo: repo (poora repo wala box) - bas yahi chahiye
+# 5. Generate -> Copy karo - dobara nahi dikhega, isliye turant Secrets me daal do
+# 6. GITHUB_REPO = github.com pe tumhare repo ka naam - jaise kumarshyam/scanner
+# 7. Kabhi bhi Token ko chat me, code me, screenshot me mat bhejo - sirf Secrets me
+""", language="text")
     trades_df_all = get_all_trades()
     if trades_df_all.empty:
         st.info("Diary khali hai.")
@@ -1088,8 +1363,16 @@ if st.session_state.show_diary:
     st.divider()
 
 # ---------------- SCAN BUTTON ----------------
+# Scan ka Time Window dikhao - taaki pata chale 09:20 pe scan ho raha hai ya 02:00 pe
+try:
+    _td = get_trading_day()
+    _s, _e = get_scan_window(_td)
+    st.info(f"Abhi Time: {ist_now().strftime('%H:%M:%S')} | Trading Day: {_td} | Scan Window: {_s.strftime('%H:%M')} se {_e.strftime('%H:%M')} tak ki candles li jayengi - 09:20 ho ya 09:35 ho ya 01:00 / 02:00, sab chalega. Fixed 09:20 nahi hai.")
+except Exception as e:
+    pass
+
 if st.button("SCAN NOW - Poora Market - Full Day Movement ke saath", use_container_width=True):
-    with st.spinner("Scan ho raha hai... IND Historical se 5minute candles mang rahe hain, 5-5 karke batch me... Thoda time lagega kyunki poora din check ho raha hai, sirf Open-High nahi."):
+    with st.spinner("Scan ho raha hai... IND se 1min + 5min + 15min + 1day mang rahe hain, 5-5 karke batch me... Poora din check ho raha hai, sirf Open-High nahi."):
         token = st.session_state.get("indmoney_secret", "")
         df_scan = pd.DataFrame()
         scan_src = ""
@@ -1137,6 +1420,16 @@ if st.button("SCAN NOW - Poora Market - Full Day Movement ke saath", use_contain
 if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
     df_scan = st.session_state.scan_df; indices_df = st.session_state.indices_data; news_df = st.session_state.news_data
     st.info(f"Scan Source: {st.session_state.get('scan_source','')} | Scan Time: {st.session_state.get('scan_time','')} | Total Stocks Checked: {len(df_scan)}")
+    # 0 Stocks aaye to wajah dikhao - chhupao mat
+    _dbg = st.session_state.get("_scan_debug", {})
+    if _dbg:
+        with st.expander("Scan Debug - IND se kitne aaye, kyu 0 aaya tha, ye dekho"):
+            st.write(f"Trading Day: {_dbg.get('trading_day','')} | Window: {_dbg.get('start','')} se {_dbg.get('end','')}")
+            st.write(f"IND se OK: {_dbg.get('ind_ok',0)} / {_dbg.get('total',0)} | Fail: {_dbg.get('ind_fail_count',0)}")
+            if _dbg.get('ind_fail_sample'):
+                st.write(f"Fail hue (sample): {_dbg.get('ind_fail_sample')}")
+            st.write(f"Note: {'; '.join(_dbg.get('debug_list',[]))}")
+            st.write("Agar IND se 0 aaye to 2 wajah hoti hain: 1) Aaj Sunday/Saturday tha - Friday ka data liya jayega, 2) Token expire ho gaya - naya Token banao. Is baar dono fix kar diye hain.")
     if st.session_state.get("auto_sent"):
         st.success("Chala gaya ✅")
     st.markdown("### 1. PICHHLA MOVE - Nifty / Bank Nifty / Sensex / Bankex")
@@ -1255,7 +1548,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
                         st.error("Nahi gaya ❌")
                 suggested = {"date": datetime.now().strftime("%Y-%m-%d"), "time": datetime.now().strftime("%H:%M:%S"), "symbol": sel_stock, "strike": strike, "opt_type": opt_type, "entry": float(entry_prem), "sl": float(sl_prem), "target": float(target_prem), "qty_lots": 1, "qty_total": float(lot), "capital_used": float(best_cost), "risk": float(max_loss), "status": "OPEN", "reason": f"{row.get('Direction','')} - {row.get('Pattern','')} - {row.get('Movement Type','')} - News {news_bias} - Prob {sel_prob:.0f}% - Expiry {expiry_shown} - {source}", "conditions": f"Gap {row.get('Gap','')} VWAP {row.get('VWAP','')} ORB {row.get('ORB','')} Vol {row.get('Volume','')} VolOK {row.get('Volatility OK','')} Movement {row.get('Movement Started?','')} Fake {row.get('Fake?','')} Session {row.get('Session Story','')}"}
                 if st.button(f"{sel_stock} ko Diary me Save Karo"):
-                    save_trade(suggested); st.success("Diary me save ho gaya!"); st.rerun()
+                    save_trade(suggested); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
             else:
                 st.error(f"{sel_stock} me Rs 5000 me koi 1 Lot wala contract nahi mila.")
         elif chain_key in st.session_state and (st.session_state[chain_key] is None or st.session_state[chain_key].empty):
