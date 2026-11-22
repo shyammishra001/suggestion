@@ -1,4 +1,10 @@
-# app.py - V13 - Clean - No Chat ID Button, No Token/Chat ID Show, Sirf Chala Gaya
+# app.py - V14 - INDstocks API Docs ke hisab se FIXED - Option Chain ab IND se aayega
+# Docs: https://api-docs.indstocks.com/getting-started/ Step 2, Step 3 + https://api-docs.indstocks.com/utility/ Option Chain
+# Galti jo pehle thi:
+# 1. URL galat tha - api.indmoney.com/api/option-chain - Sahi hai api.indstocks.com/market/option-chain
+# 2. Header galat tha - Bearer lagaya tha - Docs me sirf {'Authorization': access_token} hai, Bearer NAHI
+# 3. Param galat tha - symbol bheja tha - Docs me exchange + segment + underlying-scrip (SECURITY_ID) + expiry YYYY-MM-DD + strike_count chahiye
+# 4. Response galat samjha tha - list samjha tha - Docs me data.strikes dict hai, strike se keyed hai, har strike me ce/pe hai
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,19 +14,16 @@ import sqlite3
 import os
 import requests
 import base64
+import io
 
-st.set_page_config(page_title="Scanner", layout="wide")
+st.set_page_config(page_title="Scanner - INDstocks FIXED", layout="wide")
 
 CAPITAL = 5000
 DB_FILE = "trades.db"
 CSV_FILE = "all_trades.csv"
 GITHUB_CSV_PATH = "trades_diary/all_trades.csv"
+IND_BASE = "https://api.indstocks.com"
 
-# Telegram - Code me Token / Chat ID NAHI likha hai, Secrets me rahega, koi read nahi kar payega
-# Streamlit Cloud -> Settings -> Secrets me daalo:
-# TELEGRAM_BOT_TOKEN = "yahan token"
-# TELEGRAM_CHAT_ID = "yahan chat id"
-# GitHub me ye file jayegi, Secrets nahi jayega, isliye koi Token nahi dekh payega
 try:
     TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_CHAT = str(st.secrets.get("TELEGRAM_CHAT_ID", ""))
@@ -51,6 +54,8 @@ MARKET_STOCKS = {
     "AMBUJACEM": "AMBUJACEM.NS", "ACC": "ACC.NS", "SHREECEM": "SHREECEM.NS", "DLF": "DLF.NS", "GODREJPROP": "GODREJPROP.NS",
 }
 LOT_SIZES = {"RELIANCE": 250, "TCS": 175, "INFY": 800, "HDFCBANK": 550, "ICICIBANK": 1375, "SBIN": 1500, "TATAMOTORS": 1400, "TATASTEEL": 5500, "M&M": 800, "TITAN": 350, "ADANIENT": 300, "ADANIPORTS": 1000, "AXISBANK": 1200, "KOTAKBANK": 800, "LT": 300, "MARUTI": 50, "ONGC": 3850, "POWERGRID": 3600, "NTPC": 5700, "COALINDIA": 2100, "BPCL": 1800, "HINDALCO": 2600, "JSWSTEEL": 1350, "BAJFINANCE": 125, "BHARTIARTL": 950, "ITC": 1600, "HCLTECH": 700, "WIPRO": 3000, "TECHM": 900, "SUNPHARMA": 700, "DRREDDY": 125, "CIPLA": 650, "DIVISLAB": 200, "EICHERMOT": 175, "HEROMOTOCO": 300, "GRASIM": 250, "ULTRACEMCO": 100, "SHRIRAMFIN": 300, "MUTHOOTFIN": 500, "APOLLOHOSP": 125, "TATACONSUM": 1000, "NESTLEIND": 10, "BRITANNIA": 100, "HINDUNILVR": 300, "ASIANPAINT": 400, "KALYANJIL": 3200, "UNIONBANK": 8000, "PNB": 8000, "CANBK": 7000, "FEDERALBNK": 10000, "IDFCFIRSTB": 10000, "BEL": 4000, "HAL": 150, "TATAPOWER": 3750, "IRFC": 7500, "RVNL": 5000, "IRCTC": 1250, "MAZAGON": 150, "COCHINSHIP": 300, "NHPC": 7000, "SJVN": 8000, "HUDCO": 4000, "NBCC": 6000, "YESBANK": 20000, "SUZLON": 10000, "IDEA": 20000, "PAYTM": 800, "ZOMATO": 3000, "NYKAA": 4000, "POLICYBZR": 500, "DMART": 200, "TRENT": 200, "JUBLFOOD": 500, "INDIGO": 150, "BAJAJFINSV": 500, "BAJAJ-AUTO": 125, "SBILIFE": 750, "HDFCLIFE": 1100, "INDUSINDBK": 800, "BANKBARODA": 4000, "AUBANK": 1000, "MPHASIS": 300, "PERSISTENT": 100, "COFORGE": 100, "LTIM": 100, "VEDL": 3000, "JINDALSTEL": 800, "SAIL": 8000, "NMDC": 8000, "GAIL": 4000, "PETRONET": 3000, "IOC": 4000, "HINDPETRO": 2000, "AMBUJACEM": 1000, "ACC": 300, "SHREECEM": 25, "DLF": 1500, "GODREJPROP": 300}
+# Docs se pakka wale SECURITY_ID - RELIANCE 2885, TCS 11536 docs me likha hai
+KNOWN_SCRIP = {"RELIANCE": "2885", "TCS": "11536", "HDFCBANK": "1333", "INFY": "1594", "ICICIBANK": "4963", "SBIN": "3045", "ITC": "1660", "LT": "11483", "TITAN": "3506", "TATAMOTORS": "3846", "ONGC": "2475", "NTPC": "2882", "POWERGRID": "2562", "TATASTEEL": "3499", "HINDALCO": "1363", "JSWSTEEL": "11723", "BAJFINANCE": "317", "BHARTIARTL": "10604", "MARUTI": "10999", "SUNPHARMA": "3351", "ADANIENT": "25", "ADANIPORTS": "15083", "AXISBANK": "5900", "KOTAKBANK": "1922", "M&M": "2031", "GRASIM": "1319", "ULTRACEMCO": "11532", "HCLTECH": "7229", "WIPRO": "3787", "TECHM": "13538", "CIPLA": "694", "DIVISLAB": "10940", "EICHERMOT": "5053", "HEROMOTOCO": "1348", "COALINDIA": "20374", "BPCL": "526", "VEDL": "3063", "DLF": "14732", "BEL": "383", "HAL": "11890", "TATAPOWER": "3426", "IRCTC": "13611", "DMART": "5097", "TRENT": "1964", "INDIGO": "11184", "BAJAJFINSV": "166", "BAJAJ-AUTO": "16669", "SBILIFE": "21808", "HDFCLIFE": "467", "INDUSINDBK": "5258", "BANKBARODA": "4668", "GAIL": "1232", "IOC": "1624", "NMDC": "2029", "SAIL": "2964", "JINDALSTEL": "673", "MPHASIS": "1106", "PERSISTENT": "12355", "COFORGE": "11543", "LTIM": "17818", "AMBUJACEM": "216", "ACC": "35", "SHREECEM": "3105", "GODREJPROP": "17875"}
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -62,12 +67,12 @@ if "news_data" not in st.session_state:
     st.session_state.news_data = None
 if "indices_data" not in st.session_state:
     st.session_state.indices_data = None
-if "notifications" not in st.session_state:
-    st.session_state.notifications = []
-if "indmoney_connected" not in st.session_state:
-    st.session_state.indmoney_connected = False
 if "auto_sent" not in st.session_state:
     st.session_state.auto_sent = False
+if "indmoney_connected" not in st.session_state:
+    st.session_state.indmoney_connected = False
+if "indmoney_debug" not in st.session_state:
+    st.session_state.indmoney_debug = ""
 
 def safe_float(val, default=0.0):
     try:
@@ -98,6 +103,131 @@ def safe_int(val, default=0):
     except:
         return int(default)
 
+# ---------- INDstocks API - Docs ke hisab se EXACT ----------
+def ind_headers(token):
+    # Docs Step 2: headers = {'Authorization': access_token} - Bearer NAHI lagana
+    return {"Authorization": token.strip(), "Content-Type": "application/json"}
+
+def ind_test_profile(token):
+    # Step 2: GET /user/profile - Token sahi hai ya expire ho gaya, ye yahan se pata chalega
+    try:
+        r = requests.get(f"{IND_BASE}/user/profile", headers=ind_headers(token), timeout=10)
+        if r.status_code == 200:
+            d = r.json().get("data", {})
+            return True, f"Connected - {d.get('first_name','')} {d.get('last_name','')}"
+        else:
+            return False, f"Token Fail - Status {r.status_code} - {r.text[:300]} - Token 24 ghante me expire hota hai, naya banao"
+    except Exception as e:
+        return False, f"Connect nahi hua - {e}"
+
+def ind_get_expiries(underlying, token):
+    # Docs Contracts: GET /market/instruments/expiries?underlying=NIFTY&segment=DERIVATIVE - list ascending me aati hai, pehli wali Nearest hai
+    try:
+        r = requests.get(f"{IND_BASE}/market/instruments/expiries", headers=ind_headers(token), params={"underlying": underlying, "segment": "DERIVATIVE"}, timeout=10)
+        if r.status_code == 200:
+            data = r.json().get("data", [])
+            if data:
+                return data, ""
+            return [], "Expiries khali aayi"
+        return [], f"Expiries Fail - {r.status_code} - {r.text[:300]}"
+    except Exception as e:
+        return [], f"Expiries Error - {e}"
+
+def ind_get_scrip(symbol, token):
+    # Docs Instruments: GET /market/instruments?source=equity - CSV aati hai, usme SYMBOL_NAME se SECURITY_ID nikalna hai
+    # Pehle KNOWN map se try karo, nahi mila to CSV se nikalo
+    if symbol in KNOWN_SCRIP:
+        return KNOWN_SCRIP[symbol], "KNOWN"
+    try:
+        r = requests.get(f"{IND_BASE}/market/instruments", headers=ind_headers(token), params={"source": "equity"}, timeout=20)
+        if r.status_code == 200:
+            df = pd.read_csv(io.StringIO(r.text))
+            # Columns: SECURITY_ID, SYMBOL_NAME, TRADING_SYMBOL
+            col_sym = "SYMBOL_NAME" if "SYMBOL_NAME" in df.columns else df.columns[0]
+            col_id = "SECURITY_ID" if "SECURITY_ID" in df.columns else df.columns[2]
+            match = df[df[col_sym].astype(str).str.upper() == symbol.upper()]
+            if not match.empty:
+                return str(match.iloc[0][col_id]), "CSV"
+            # TRADING_SYMBOL se bhi try karo
+            if "TRADING_SYMBOL" in df.columns:
+                match2 = df[df["TRADING_SYMBOL"].astype(str).str.upper() == symbol.upper()]
+                if not match2.empty:
+                    return str(match2.iloc[0][col_id]), "CSV"
+        return "", f"CSV me {symbol} nahi mila - Status {r.status_code}"
+    except Exception as e:
+        return "", f"Scrip Error - {e}"
+
+def ind_get_option_chain(symbol, token):
+    # Docs Option Chain: GET /market/option-chain?exchange=NSE&segment=EQUITY&underlying-scrip=2885&expiry=YYYY-MM-DD&strike_count=25
+    # Response: data.strikes = { "24450": {"ce": {...last_price...}, "pe": {...}} } - dict hai, list NAHI
+    if not token or len(token.strip()) < 10:
+        return pd.DataFrame(), "Token nahi diya", "", "", ""
+    # 1. Expiry nikalo - Nearest wali
+    expiries, err_exp = ind_get_expiries(symbol, token)
+    if not expiries:
+        return pd.DataFrame(), f"Expiry nahi mili - {err_exp}", "", "", ""
+    expiry_yyyy_mm_dd = str(expiries[0])  # YYYY-MM-DD format me hi aati hai
+    # 2. Scrip nikalo
+    scrip, scrip_src = ind_get_scrip(symbol, token)
+    if not scrip:
+        return pd.DataFrame(), f"Scrip nahi mila - {scrip_src}", expiry_yyyy_mm_dd, "", ""
+    # 3. Option Chain mango - strike_count 25 matlab ATM ke dono taraf 25-25 = 51 strikes
+    try:
+        params = {"exchange": "NSE", "segment": "EQUITY", "underlying-scrip": scrip, "expiry": expiry_yyyy_mm_dd, "strike_count": 25}
+        r = requests.get(f"{IND_BASE}/market/option-chain", headers=ind_headers(token), params=params, timeout=15)
+        if r.status_code != 200:
+            return pd.DataFrame(), f"IND Fail - Status {r.status_code} - {r.text[:500]}", expiry_yyyy_mm_dd, scrip, ""
+        j = r.json()
+        data = j.get("data", {})
+        strikes_dict = data.get("strikes", {})
+        underlying_ltp = safe_float(data.get("underlying_ltp", 0))
+        if not strikes_dict:
+            return pd.DataFrame(), f"IND se strikes khali aaye - {str(j)[:400]}", expiry_yyyy_mm_dd, scrip, str(underlying_ltp)
+        rows = []
+        for strike_str, legs in strikes_dict.items():
+            try:
+                strike = safe_int(float(strike_str))
+                ce = legs.get("ce", {}) if isinstance(legs, dict) else {}
+                pe = legs.get("pe", {}) if isinstance(legs, dict) else {}
+                rows.append({
+                    "Strike": strike,
+                    "CE Premium": safe_float(ce.get("last_price", 0)),
+                    "PE Premium": safe_float(pe.get("last_price", 0)),
+                    "CE OI": safe_int(ce.get("oi", 0)),
+                    "PE OI": safe_int(pe.get("oi", 0)),
+                    "CE IV": safe_float(ce.get("iv", 0)),
+                    "PE IV": safe_float(pe.get("iv", 0)),
+                    "CE Delta": safe_float((ce.get("greeks", {}) or {}).get("delta", 0)),
+                    "PE Delta": safe_float((pe.get("greeks", {}) or {}).get("delta", 0)),
+                    "CE Bid": safe_float(ce.get("top_bid_price", 0)),
+                    "CE Ask": safe_float(ce.get("top_ask_price", 0)),
+                    "PE Bid": safe_float(pe.get("top_bid_price", 0)),
+                    "PE Ask": safe_float(pe.get("top_ask_price", 0)),
+                })
+            except:
+                continue
+        df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+        if df.empty:
+            return pd.DataFrame(), "Parse ke baad khali", expiry_yyyy_mm_dd, scrip, str(underlying_ltp)
+        return df, f"IND SE AAYA - {len(df)} strikes", expiry_yyyy_mm_dd, scrip, str(underlying_ltp)
+    except Exception as e:
+        return pd.DataFrame(), f"Option Chain Error - {e}", expiry_yyyy_mm_dd, scrip, ""
+
+def ind_get_quote(symbol, token):
+    # Docs Step 3: GET /market/quotes/full?scrip-codes=NSE_2885 - LTP check ke liye
+    try:
+        scrip, _ = ind_get_scrip(symbol, token)
+        if not scrip:
+            return 0, "Scrip nahi"
+        r = requests.get(f"{IND_BASE}/market/quotes/full", headers=ind_headers(token), params={"scrip-codes": f"NSE_{scrip}"}, timeout=10)
+        if r.status_code == 200:
+            data = r.json().get("data", {})
+            for k, v in data.items():
+                return safe_float(v.get("live_price", 0)), "OK"
+        return 0, f"Quote Fail {r.status_code}"
+    except Exception as e:
+        return 0, str(e)
+
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
         return False
@@ -124,62 +254,13 @@ def send_top5(top5_df, expiry_str):
         else:
             orb_pos = f"ORB ke ANDAR ({orb_low:.1f} - {orb_high:.1f})"
         msg += f"{i}. {stock_name} - LTP Rs {ltp:.1f} - {direction} - Prob {prob:.0f}%\n   Pattern: {pattern}\n   Kahan pe hai: {vwap_pos}, {orb_pos}\n   Movement: {movement}\n   Gap: {gap:.2f}% | Vol: {vol:.1f}x\n------------------------\n"
-    ok = send_telegram(msg)
-    return ok
+    return send_telegram(msg)
 
 def send_strike(stock, strike, opt_type, entry, sl, target, cost, lot, expiry_str, movement):
     entry_f = safe_float(entry); sl_f = safe_float(sl); target_f = safe_float(target); cost_f = safe_float(cost); lot_f = safe_float(lot)
     max_profit = round((target_f - entry_f) * lot_f, 0); max_loss = round((entry_f - sl_f) * lot_f, 0)
     msg = f"STRIKE SELECTED - {stock}\n------------------------\nStock: {stock}\nStrike: {safe_int(strike)} {opt_type}\nExpiry: {expiry_str}\nEntry: Rs {entry_f}\nStop Loss: Rs {sl_f}\nTarget: Rs {target_f}\n1 Lot Qty: {safe_int(lot_f)}\n1 Lot Cost: Rs {cost_f:.0f}\nMax Profit: Rs {max_profit:.0f}\nMax Loss: Rs {max_loss:.0f}\nMovement: {movement}\nTime: {datetime.now().strftime('%H:%M:%S')}"
-    ok = send_telegram(msg)
-    return ok
-
-def get_option_chain(symbol, ltp, expiry_str, secret_code):
-    if secret_code and len(secret_code) >= 4:
-        headers = {"Authorization": f"Bearer {secret_code}", "x-api-key": secret_code, "Content-Type": "application/json", "User-Agent": "INDMoney-Scanner/1.0"}
-        for url in [f"https://api.indmoney.com/api/option-chain?symbol={symbol}&expiry={expiry_str}", f"https://api.indmoney.com/api/v1/option-chain?symbol={symbol}&expiry={expiry_str}"]:
-            try:
-                r = requests.get(url, headers=headers, timeout=8)
-                if r.status_code == 200:
-                    data = r.json()
-                    items = data.get("data", []) if isinstance(data, dict) else data
-                    rows = []
-                    if isinstance(items, list) and len(items) > 0:
-                        for item in items:
-                            s = item.get("strikePrice") or item.get("strike")
-                            ce = item.get("CE", {}) if isinstance(item.get("CE"), dict) else {}
-                            pe = item.get("PE", {}) if isinstance(item.get("PE"), dict) else {}
-                            if s:
-                                rows.append({"Strike": safe_int(s), "CE Premium": safe_float(ce.get("lastPrice", 0)), "PE Premium": safe_float(pe.get("lastPrice", 0))})
-                        if rows:
-                            return pd.DataFrame(rows).sort_values("Strike"), "IND MONEY"
-            except:
-                continue
-    try:
-        ticker_sym = MARKET_STOCKS.get(symbol, f"{symbol}.NS")
-        tk = yf.Ticker(ticker_sym)
-        expiries = tk.options if hasattr(tk, 'options') else []
-        if expiries and len(expiries) > 0:
-            nearest_yahoo_expiry = expiries[0]
-            opt = tk.option_chain(nearest_yahoo_expiry)
-            calls = opt.calls; puts = opt.puts
-            merged = pd.merge(calls[["strike", "lastPrice"]], puts[["strike", "lastPrice"]], on="strike", how="outer", suffixes=("_CE", "_PE"))
-            merged = merged.rename(columns={"strike": "Strike", "lastPrice_CE": "CE Premium", "lastPrice_PE": "PE Premium"})
-            merged["CE Premium"] = merged["CE Premium"].fillna(0).apply(safe_float)
-            merged["PE Premium"] = merged["PE Premium"].fillna(0).apply(safe_float)
-            merged["Strike"] = merged["Strike"].apply(safe_int)
-            merged = merged.sort_values("Strike")
-            if not merged.empty and (merged["CE Premium"] > 0).any():
-                return merged, f"YAHOO - {nearest_yahoo_expiry}"
-    except:
-        pass
-    return pd.DataFrame(), "NAHI AAYA"
-
-def get_nearest_expiry():
-    today = datetime.now().date()
-    days_ahead = (3 - today.weekday()) % 7
-    nearest = today if days_ahead == 0 else today + timedelta(days=days_ahead)
-    return nearest.strftime("%d-%b-%Y")
+    return send_telegram(msg)
 
 def check_all_strikes(chain_df, lot, ltp, direction, budget=5000):
     if chain_df is None or chain_df.empty:
@@ -193,7 +274,7 @@ def check_all_strikes(chain_df, lot, ltp, direction, budget=5000):
         if prem <= 0:
             continue
         cost = round(prem * lot_f, 0); fits = cost <= budget
-        results.append({"Strike": strike, "Type": opt_type, "Premium": prem, "Lot Qty": safe_int(lot_f), "1 Lot Cost": cost, "Rs 5000 me?": "✅ HO JAYEGA" if fits else "❌ NAHI HOGA", "ATM se Door": round(abs(strike - ltp_f), 1), "Fits": fits})
+        results.append({"Strike": strike, "Type": opt_type, "Premium": prem, "Lot Qty": safe_int(lot_f), "1 Lot Cost": cost, "Rs 5000 me?": "✅ HO JAYEGA" if fits else "❌ NAHI HOGA", "ATM se Door": round(abs(strike - ltp_f), 1), "Fits": fits, "OI": safe_int(r.get("CE OI", 0) if opt_type == "CE" else r.get("PE OI", 0)), "IV": safe_float(r.get("CE IV", 0) if opt_type == "CE" else r.get("PE IV", 0))})
     df = pd.DataFrame(results).sort_values("ATM se Door") if results else pd.DataFrame()
     best = df[df["Fits"] == True].sort_values("ATM se Door").iloc[0] if not df.empty and (df["Fits"] == True).any() else None
     return df, best
@@ -251,20 +332,29 @@ def update_trade_status(trade_id, status, exit_price, pnl):
 init_db()
 
 if not st.session_state.authenticated:
-    st.title("Scanner")
+    st.title("Scanner - INDstocks")
+    st.info("IND Token 24 ghante me expire hota hai. Roz subah naya Token banao: indstocks.com -> Login -> /app/api-trading/access-tokens -> Claim Your API Access -> Generate -> Copy karke yahan daalo.")
     with st.form("login_form"):
-        indmoney_secret = st.text_input("INDmoney Secret Code", type="password")
+        indmoney_secret = st.text_input("INDstocks Access Token - indstocks.com se - Roz naya wala", type="password", placeholder="indstocks.com/app/api-trading/access-tokens se Copy kiya hua Token")
         app_pin = st.text_input("PIN (4 ank)", type="password")
         submit = st.form_submit_button("Scanner Kholo", use_container_width=True)
         if submit:
             if not app_pin or len(app_pin) < 4:
                 st.error("4 ank ka PIN daalo")
+            elif not indmoney_secret or len(indmoney_secret) < 10:
+                st.error("IND Token daalo - Bina Token ke Option Chain nahi aayega")
             else:
-                st.session_state.authenticated = True
-                st.session_state.indmoney_secret = indmoney_secret
-                st.session_state.indmoney_connected = bool(indmoney_secret and len(indmoney_secret) >= 4)
-                st.rerun()
-    if st.button("Bina Secret ke Dekho"):
+                ok, msg = ind_test_profile(indmoney_secret)
+                if not ok:
+                    st.error(msg)
+                    st.write("Token galat hai ya expire ho gaya hai. indstocks.com pe jaake naya Token banao, phir daalo.")
+                else:
+                    st.session_state.authenticated = True
+                    st.session_state.indmoney_secret = indmoney_secret
+                    st.session_state.indmoney_connected = True
+                    st.session_state.indmoney_debug = msg
+                    st.rerun()
+    if st.button("Bina Token ke Dekho - Option Chain nahi aayega"):
         st.session_state.authenticated = True
         st.session_state.indmoney_secret = ""
         st.session_state.indmoney_connected = False
@@ -273,12 +363,17 @@ if not st.session_state.authenticated:
 
 top_left, top_right = st.columns([4, 1])
 with top_left:
-    st.title("Scanner | Rs 5,000")
+    st.title("Scanner | Rs 5,000 | INDstocks FIXED")
 with top_right:
     st.write("")
     if st.button("Trading Diary", use_container_width=True):
         st.session_state.show_diary = not st.session_state.show_diary
         st.rerun()
+
+if st.session_state.indmoney_connected:
+    st.success(f"IND CONNECTED - {st.session_state.get('indmoney_debug','')}")
+else:
+    st.error("IND NOT CONNECTED - Option Chain nahi aayega")
 
 st.sidebar.title("Dashboard")
 if st.sidebar.button("Trading Diary Kholo"):
@@ -435,15 +530,14 @@ if st.button("SCAN NOW", use_container_width=True):
         st.session_state.auto_sent = False
         if not df_scan.empty:
             top = df_scan.iloc[0]
-            # AUTO - Prob 70+ hai to khud hi bhej dega, press karne ki zaroorat nahi
             if safe_float(top.get("Probability %", 0)) >= 70:
-                expiry_auto = get_nearest_expiry()
+                expiry_auto = "IND se aayegi"
                 ok_auto = send_top5(df_scan.head(5), expiry_auto)
                 st.session_state.auto_sent = ok_auto
         st.rerun()
 
 if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
-    df_scan = st.session_state.scan_df; indices_df = st.session_state.indices_data; news_df = st.session_state.news_data; expiry_str = get_nearest_expiry()
+    df_scan = st.session_state.scan_df; indices_df = st.session_state.indices_data; news_df = st.session_state.news_data
     if st.session_state.get("auto_sent"):
         st.success("Chala gaya ✅")
     st.markdown("### 1. PICHHLA MOVE")
@@ -466,16 +560,15 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
     st.dataframe(top5[["Stock", "LTP", "Gap %", "Direction", "Pattern", "Probability %", "Movement", "Movement Started?", "Pass"]], use_container_width=True, hide_index=True)
     top1 = df_scan.iloc[0]; top1_stock = str(top1.get("Stock", "")); top1_prob = safe_float(top1.get("Probability %", 0)); top1_ltp = safe_float(top1.get("LTP", 0))
     st.success(f"No.1: {top1_stock} - Prob {top1_prob:.0f}% - LTP Rs {top1_ltp:.1f}")
-    # Sirf Stock Send - Press karo to bhejega, Auto bhi bhejega
     if st.button("SEND NOTIFICATION", use_container_width=True):
-        ok = send_top5(top5, expiry_str)
+        ok = send_top5(top5, "IND se")
         if ok:
             st.success("Chala gaya ✅")
         else:
             st.error("Nahi gaya ❌")
     st.markdown("### 4. PURA MARKET")
     st.dataframe(df_scan[["Stock", "LTP", "Gap %", "Direction", "Pattern", "Probability %", "Gap", "VWAP", "ORB", "Volume", "Movement Started?", "Pass"]], use_container_width=True, hide_index=True)
-    st.markdown("### 5. OPTION CHAIN")
+    st.markdown("### 5. OPTION CHAIN - INDstocks se hi aayega, NSE Website se NAHI, Yahoo se NAHI")
     sel_stock = st.selectbox("Stock Chuno", df_scan["Stock"].tolist(), index=0)
     if sel_stock:
         row = df_scan[df_scan["Stock"] == sel_stock].iloc[0]
@@ -490,26 +583,27 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             orb_txt = "NEECHE - Breakdown"
         else:
             orb_txt = "ANDAR"
-        st.write(f"Selected: {sel_stock} | LTP: Rs {sel_ltp:.1f} | Pattern: {row.get('Pattern','')} | Prob: {sel_prob:.0f}% | Expiry: {expiry_str}")
+        st.write(f"Selected: {sel_stock} | LTP: Rs {sel_ltp:.1f} | Pattern: {row.get('Pattern','')} | Prob: {sel_prob:.0f}%")
         st.write(f"Kahan pe hai: LTP Rs {sel_ltp:.1f} - VWAP Rs {sel_vwap:.1f} se {vwap_txt} - ORB {sel_orb_low:.1f} - {sel_orb_high:.1f} ke {orb_txt}")
-        if st.button(f"{sel_stock} ka Option Chain Mango", use_container_width=True):
-            with st.spinner("Option Chain mang rahe hain..."):
-                chain_df, source = get_option_chain(sel_stock, sel_ltp, expiry_str, st.session_state.get("indmoney_secret", ""))
-                st.session_state[f"chain_{sel_stock}"] = chain_df; st.session_state[f"chain_source_{sel_stock}"] = source; st.session_state[f"expiry_{sel_stock}"] = expiry_str
+        if st.button(f"{sel_stock} ka Option Chain Mango - INDstocks se", use_container_width=True):
+            with st.spinner("INDstocks se Option Chain mang rahe hain - Docs wala tareeka..."):
+                chain_df, source, expiry_yyyy, scrip_used, ind_ltp = ind_get_option_chain(sel_stock, st.session_state.get("indmoney_secret", ""))
+                st.session_state[f"chain_{sel_stock}"] = chain_df; st.session_state[f"chain_source_{sel_stock}"] = source; st.session_state[f"expiry_{sel_stock}"] = expiry_yyyy; st.session_state[f"scrip_{sel_stock}"] = scrip_used; st.session_state[f"indltp_{sel_stock}"] = ind_ltp
                 st.rerun()
         chain_key = f"chain_{sel_stock}"
         if chain_key in st.session_state and st.session_state[chain_key] is not None and not st.session_state[chain_key].empty:
-            chain_df = st.session_state[chain_key]; source = st.session_state.get(f"chain_source_{sel_stock}", ""); expiry_shown = st.session_state.get(f"expiry_{sel_stock}", expiry_str)
-            st.success(f"Option Chain aaya - {source} - Expiry: {expiry_shown}")
+            chain_df = st.session_state[chain_key]; source = st.session_state.get(f"chain_source_{sel_stock}", ""); expiry_shown = st.session_state.get(f"expiry_{sel_stock}", ""); scrip_shown = st.session_state.get(f"scrip_{sel_stock}", ""); ind_ltp_shown = st.session_state.get(f"indltp_{sel_stock}", "")
+            st.success(f"✅ {source} - Expiry: {expiry_shown} - Scrip: {scrip_shown} - IND LTP: {ind_ltp_shown} - Total Strikes: {len(chain_df)}")
             st.dataframe(chain_df, use_container_width=True, hide_index=True)
             lot = LOT_SIZES.get(sel_stock, 100)
             check_df, best = check_all_strikes(chain_df, lot, sel_ltp, row.get("Direction", ""), budget=5000)
+            st.markdown(f"#### TOTAL STRIKE CHECK - Kaunsa 1 Lot Rs 5000 me Ho Jayega? (Lot: {lot}, Expiry: {expiry_shown})")
             if not check_df.empty:
                 st.dataframe(check_df, use_container_width=True, hide_index=True)
                 fits_df = check_df[check_df["Fits"] == True]
                 st.write(f"Total Checked: {len(check_df)} | 5000 me Ho Jayenge: {len(fits_df)}")
                 if not fits_df.empty:
-                    st.dataframe(fits_df[["Strike", "Type", "Premium", "1 Lot Cost", "Rs 5000 me?"]], use_container_width=True, hide_index=True)
+                    st.dataframe(fits_df[["Strike", "Type", "Premium", "1 Lot Cost", "Rs 5000 me?", "OI", "IV"]], use_container_width=True, hide_index=True)
             if best is not None:
                 if news_bias == "NEGATIVE" and str(best.get("Type", "")) == "CE":
                     sl_factor = 0.80; target_factor = 1.30
@@ -520,7 +614,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
                 entry_prem = safe_float(best.get("Premium", 0)); strike = safe_int(best.get("Strike", 0)); opt_type = str(best.get("Type", "CE"))
                 sl_prem = round(entry_prem * sl_factor, 1); target_prem = round(entry_prem * target_factor, 1)
                 max_loss = round((entry_prem - sl_prem) * safe_float(lot), 0); max_profit = round((target_prem - entry_prem) * safe_float(lot), 0); best_cost = safe_float(best.get("1 Lot Cost", 0))
-                st.success(f"STRIKE: {sel_stock} {strike} {opt_type} @ Rs {entry_prem} - Cost Rs {best_cost:.0f} - SL Rs {sl_prem} - Target Rs {target_prem}")
+                st.success(f"STRIKE: {sel_stock} {strike} {opt_type} @ Rs {entry_prem} - Expiry: {expiry_shown} - Cost Rs {best_cost:.0f} - SL Rs {sl_prem} - Target Rs {target_prem}")
                 st.write(f"Entry: Rs {entry_prem} | Target: Rs {target_prem} | SL: Rs {sl_prem} | Max Profit: Rs {max_profit:.0f} | Max Loss: Rs {max_loss:.0f}")
                 if st.button(f"{sel_stock} {strike} {opt_type} ka Notification Bhejo", use_container_width=True):
                     ok = send_strike(sel_stock, strike, opt_type, entry_prem, sl_prem, target_prem, best_cost, lot, expiry_shown, str(row.get("Movement", "")))
@@ -534,7 +628,9 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             else:
                 st.error(f"{sel_stock} me Rs 5000 me koi 1 Lot wala contract nahi mila.")
         elif chain_key in st.session_state and (st.session_state[chain_key] is None or st.session_state[chain_key].empty):
-            st.error("Option Chain nahi aaya.")
+            st.error(f"❌ Option Chain nahi aaya - Wajah: {st.session_state.get(f'chain_source_{sel_stock}','')}")
+            st.write(f"Expiry try ki thi: {st.session_state.get(f'expiry_{sel_stock}','')} | Scrip try kiya tha: {st.session_state.get(f'scrip_{sel_stock}','')}")
+            st.write("Sabse common wajah: Token 24 ghante me expire ho gaya hai. indstocks.com pe jaake naya Token banao, Logout karke dobara Login karo.")
         else:
             st.info(f"{sel_stock} ka Option Chain Mango dabao.")
 else:
