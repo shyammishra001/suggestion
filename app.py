@@ -1193,8 +1193,12 @@ HISTORY_DIR = "history"
 # Isse zyada purani candles apne aap hat jayengi - folder kabhi nahi bharega
 TF_LIST = ["5min", "15min", "1hour", "4hour", "daily", "weekly"]
 TF_API = {"5min": "5minute", "15min": "15minute", "1hour": "1hour", "4hour": "4hour", "daily": "1day", "weekly": "1week"}
+# V36 - Interval naam ka fallback - Photo me 1H/4H 0 aaya tha, kyunki "1hour"/"4hour" naam API ne nahi mana ho sakta hai - ab 3 naam try karenge, jo chalega wahi rahega
+TF_API_TRY = {"5min": ["5minute"], "15min": ["15minute"], "1hour": ["1hour", "60minute", "1H"], "4hour": ["4hour", "240minute", "4H"], "daily": ["1day"], "weekly": ["1week", "1Week", "W"]}
+# V36 - Pehli baar kitna mangna hai (500 candles tak ka lakshya) - DELETE NAHI HOGA, ye sirf pehli baar ka fetch size hai
 TF_RETENTION = {"5min": 500, "15min": 500, "1hour": 500, "4hour": 500, "daily": 500, "weekly": 500}
-TF_LOOKBACK_DAYS = {"5min": 7, "15min": 30, "1hour": 100, "4hour": 400, "daily": 500, "weekly": 3650}
+# V36 - Lookback API ki limit me rakha - 1H 100 din / 4H 400 din mangne pe API 0 deta tha, isliye 1H 30 din, 4H 60 din, Weekly 365 din - baaki Delta se judta jayega (add karte jana), kabhi delete nahi hoga
+TF_LOOKBACK_DAYS = {"5min": 7, "15min": 30, "1hour": 30, "4hour": 60, "daily": 500, "weekly": 365}
 TF_DELTA = {"5min": timedelta(minutes=5), "15min": timedelta(minutes=15), "1hour": timedelta(hours=1), "4hour": timedelta(hours=4), "daily": timedelta(days=1), "weekly": timedelta(weeks=1)}
 def tf_month_path(tf, yyyymm):
     # _push_master ko ye path denge - wo aage data/ laga dega -> data/history/5min/2026-11.csv
@@ -1330,13 +1334,8 @@ def save_tf_month(tf, yyyymm, new_rows_df):
         _merged = _merged.drop_duplicates(subset=["STOCK", "TIME"], keep="last")
         _merged["TIME_DT"] = pd.to_datetime(_merged["TIME"].astype(str), errors="coerce")
         _merged = _merged.dropna(subset=["TIME_DT"]).sort_values(["STOCK", "TIME_DT"]).drop(columns=["TIME_DT"])
-        # V35 - Retention: har stock ki sirf aakhri N candles rakho - purani apne aap hat jayegi, folder nahi bharega
-        try:
-            _keep_n = int(TF_RETENTION.get(tf, 500))
-            if _keep_n > 0 and not _merged.empty:
-                _merged = _merged.groupby("STOCK", group_keys=False).tail(_keep_n)
-        except:
-            pass
+        # V36 - DELETE BAND - Pichhla data rahega, delete nahi hoga - usse seekh ke selection improve hoga, isliye purani candles hatana band
+        # (Pehle yahan tail(500) se purani candles kat jati thi - ab sab rahega)
         _ok, _m = _push_master_to_github(tf_month_path(tf, yyyymm), _merged.to_csv(index=False).encode("utf-8"))
         if _ok:
             try:
@@ -1387,13 +1386,13 @@ def check_saved_history():
                 except:
                     continue
             _out[_tf] = {"last": _last, "first": _first, "candles": int(_total), "stocks": len(_stocks)}
-            _rows.append({"Timeframe": _tf, "Rakhna hai": int(TF_RETENTION.get(_tf, 500)), "Saved hai (3 mahine me)": int(_total),
+            _rows.append({"Timeframe": _tf, "Pehli baar": int(TF_RETENTION.get(_tf, 500)), "Saved hai (3 mahine me)": int(_total),
                           "Stocks": len(_stocks),
                           "Pehli candle": _first.strftime("%Y-%m-%d %H:%M") if _first is not None else "-",
                           "Aakhri saved": _last.strftime("%Y-%m-%d %H:%M") if _last is not None else "Kuch nahi saved - pehli baar download hoga"})
         return _out, pd.DataFrame(_rows)
     except Exception as e:
-        return {}, pd.DataFrame([{"Timeframe": "Error", "Rakhna hai": "", "Saved hai (3 mahine me)": "", "Stocks": "", "Pehli candle": "", "Aakhri saved": f"Check me error - {e}"}])
+        return {}, pd.DataFrame([{"Timeframe": "Error", "Pehli baar": "", "Saved hai (3 mahine me)": "", "Stocks": "", "Pehli candle": "", "Aakhri saved": f"Check me error - {e}"}])
 
 
 def load_history_cache_from_github():
@@ -2028,8 +2027,8 @@ def ind_historical_5x5_with_retry(symbols_with_scrip, interval, start_ms, end_ms
     return result, logs
 
 def download_history_tf_month(token, universe_stocks, scrip_map_dict):
-    # V35 - Download se PEHLE check karo kahan tak saved hai, uske AAGE ka hi mango - purana dobara mat mango
-    # - Pehli baar: poora lookback (500 candles tak) - 5min 7 din, 15min 30 din, 1H 100 din, 4H 400 din, Daily 500 din, Weekly 10 saal
+    # V36 - Download se PEHLE check karo kahan tak saved hai, uske AAGE ka hi mango - purana dobara mat mango, delete kabhi nahi hoga
+    # - Pehli baar: poora lookback - 5min 7 din, 15min 30 din, 1H 30 din, 4H 60 din, Daily 500 din, Weekly 365 din - baaki Delta se judta jayega
     # - Agli baar: Aakhri saved + 1 candle se Abhi Tak ka Delta hi mango - pichhla data store rahega, naya uske upar jud jayega (overwrite nahi, update hoga)
     # - Agar aakhri saved abhi ka hi hai to us timeframe ko chhedo hi mat - pehle se saved hai
     # Returns [(tf, yyyymm, ok, msg)]
@@ -2077,23 +2076,66 @@ def download_history_tf_month(token, universe_stocks, scrip_map_dict):
                 if _start_dt >= _scan_end:
                     _out.append((_tf, "", True, f"{_tf}: naya kuch nahi - pehle se {_last_saved} tak saved hai"))
                     continue
-                _res, _logs = ind_historical_5x5_with_retry(_pairs, TF_API[_tf], to_ms(_start_dt), to_ms(_scan_end), token)
+                # V36 - Pehle kaun-kaun download hai, kaun nahi - har TF ke liye interval naam + chhota window dono try karo, taaki 1H/4H 0 na rahe
                 _by_month = {}
-                for _sym, _r in (_res or {}).items():
-                    _candles = (_r or {}).get("candles", []) or []
-                    if not _candles:
+                _tried = []
+                _got_any = False
+                for _iv in TF_API_TRY.get(_tf, [TF_API.get(_tf, "5minute")]):
+                    try:
+                        _res, _logs = ind_historical_5x5_with_retry(_pairs, _iv, to_ms(_start_dt), to_ms(_scan_end), token)
+                        _tried.append(_iv)
+                        _tmp = {}
+                        for _sym, _r in (_res or {}).items():
+                            _candles = (_r or {}).get("candles", []) or []
+                            if not _candles:
+                                continue
+                            _df_c = ind_candles_to_df(_candles)
+                            _rows = tf_rows_from_candles_df(_df_c, _sym)
+                            if _rows.empty:
+                                continue
+                            _rows["MM"] = pd.to_datetime(_rows["TIME"].astype(str), errors="coerce").dt.strftime("%Y-%m")
+                            for _mm, _sub in _rows.groupby("MM"):
+                                if not _mm or str(_mm) == "nan":
+                                    continue
+                                _tmp.setdefault(str(_mm), []).append(_sub.drop(columns=["MM"]))
+                        if _tmp:
+                            _by_month = _tmp
+                            _got_any = True
+                            _mode = f"{_mode} - interval '{_iv}' chala"
+                            break
+                    except Exception as _e_iv:
+                        _tried.append(f"{_iv} (error)")
                         continue
-                    _df_c = ind_candles_to_df(_candles)
-                    _rows = tf_rows_from_candles_df(_df_c, _sym)
-                    if _rows.empty:
-                        continue
-                    _rows["MM"] = pd.to_datetime(_rows["TIME"].astype(str), errors="coerce").dt.strftime("%Y-%m")
-                    for _mm, _sub in _rows.groupby("MM"):
-                        if not _mm or str(_mm) == "nan":
-                            continue
-                        _by_month.setdefault(str(_mm), []).append(_sub.drop(columns=["MM"]))
+                # Agar bada window pe 0 aaya to chhota window try karo - API ki range limit se bada mangne pe 0 aata tha, chhote me aa jayega
+                if not _got_any:
+                    try:
+                        _small_days = 7 if _tf in ("5min", "15min", "1hour", "4hour") else 30
+                        _start_small = _scan_end - timedelta(days=_small_days)
+                        if _start_small < _start_dt:
+                            _start_small = _start_dt
+                        _res2, _logs2 = ind_historical_5x5_with_retry(_pairs, TF_API_TRY.get(_tf, [TF_API.get(_tf, "5minute")])[0], to_ms(_start_small), to_ms(_scan_end), token)
+                        _tmp2 = {}
+                        for _sym, _r in (_res2 or {}).items():
+                            _candles = (_r or {}).get("candles", []) or []
+                            if not _candles:
+                                continue
+                            _df_c = ind_candles_to_df(_candles)
+                            _rows = tf_rows_from_candles_df(_df_c, _sym)
+                            if _rows.empty:
+                                continue
+                            _rows["MM"] = pd.to_datetime(_rows["TIME"].astype(str), errors="coerce").dt.strftime("%Y-%m")
+                            for _mm, _sub in _rows.groupby("MM"):
+                                if not _mm or str(_mm) == "nan":
+                                    continue
+                                _tmp2.setdefault(str(_mm), []).append(_sub.drop(columns=["MM"]))
+                        if _tmp2:
+                            _by_month = _tmp2
+                            _got_any = True
+                            _mode = f"{_mode} - bada window 0 diya, chhota window ({_small_days} din) chala"
+                    except:
+                        pass
                 if not _by_month:
-                    _out.append((_tf, "", True, f"{_tf}: {_mode} - naya candle nahi aaya"))
+                    _out.append((_tf, "", False, f"{_tf}: {_mode} - 0 candles - try kiya: {', '.join(_tried)} - Agli baar phir try hoga, purana data delete nahi hua"))
                     continue
                 for _mm, _parts in _by_month.items():
                     _merged = pd.concat(_parts, ignore_index=True)
@@ -3389,6 +3431,90 @@ def is_qualifying_row(row):
     except Exception as e:
         return False, f"Rule check me error - {e}"
 
+def learn_from_past():
+    # V36 - AI jaisa seekhna - Pichhla data use karo, delete mat karo, usse selection improve karo
+    # Diary ke band trade se: kis stock me jeet/haar hui, kis direction me jeet hui - usse agle Scan ka Score badlega
+    # Returns (adjust_dict {STOCK: (adj, reason)}, summary_df, summary_text)
+    _adjust = {}
+    _rows = []
+    _summary = "Diary me band trade nahi hai - seekhne ke liye pehle 2-3 trade Diary me save karo"
+    try:
+        _df = get_all_trades()
+        if _df is not None and not _df.empty and "symbol" in _df.columns and "status" in _df.columns:
+            _closed = _df[_df["status"].astype(str).str.upper().isin(["TARGET HIT", "SL HIT", "EXITED"])]
+            if not _closed.empty:
+                _total = len(_closed)
+                try:
+                    _pnl = pd.to_numeric(_closed["pnl"], errors="coerce").fillna(0)
+                    _wins = int((_pnl > 0).sum())
+                    _win_rate = round(_wins / _total * 100) if _total else 0
+                except:
+                    _wins = 0; _win_rate = 0
+                _summary = f"Diary se seekha: {_total} band trade, {_wins} jeet ({_win_rate}%) - "
+                for _sym, _g in _closed.groupby(_closed["symbol"].astype(str).str.upper()):
+                    try:
+                        _n = len(_g)
+                        if _n < 2:
+                            continue
+                        _p = pd.to_numeric(_g["pnl"], errors="coerce").fillna(0)
+                        _w = int((_p > 0).sum())
+                        _wr = _w / _n * 100
+                        if _wr >= 60:
+                            _adjust[str(_sym).upper()] = (5, f"Diary me {_n} me se {_w} jeet ({_wr:.0f}%) - Score +5")
+                            _rows.append({"Stock": str(_sym).upper(), "Trade": _n, "Jeet": _w, "Win %": round(_wr), "Score Badla": "+5"})
+                        elif _wr <= 40:
+                            _adjust[str(_sym).upper()] = (-10, f"Diary me {_n} me se {_w} jeet ({_wr:.0f}%) - Score -10")
+                            _rows.append({"Stock": str(_sym).upper(), "Trade": _n, "Jeet": _w, "Win %": round(_wr), "Score Badla": "-10"})
+                    except:
+                        continue
+                if _rows:
+                    _summary += f"{len(_rows)} stock ka Score Diary se badla"
+                else:
+                    _summary += "Kisi stock me 2+ trade nahi hai, isliye Score nahi badla - 2 trade ke baad seekhega"
+    except Exception as _e:
+        _summary = f"Seekhne me error - {_e}"
+    return _adjust, pd.DataFrame(_rows), _summary
+
+
+def build_best_effort_call(row, chain_df, expiry, news_bias, learn_adj=0):
+    # V36 - BEST EFFORT - Koi stock sab rule pass nahi karta to bhi 1 stock do, khali mat chhodo
+    # Score = Prob x 0.6 + Diary se seekha hua adjustment - taaki pata chale ye pakka setup nahi hai, par Top me sabse behtar yahi hai
+    # Single Search me isko nahi bulate - sirf Scan ke FINAL CALL me, taaki zabardasti trade na bane
+    try:
+        stock = str(row.get("Stock", ""))
+        ltp = safe_float(row.get("LTP", 0))
+        prob = safe_float(row.get("Probability %", 0))
+        direction = str(row.get("Direction", ""))
+        mtype = str(row.get("Movement Type", ""))
+        _ok_q, _why_q = is_qualifying_row(row)
+        _score = int(max(0, min(100, prob * 0.6 + safe_float(learn_adj))))
+        if chain_df is None or chain_df.empty:
+            return {"status": "NO_CHAIN", "stock": stock, "ltp": ltp, "prob": prob, "score": _score, "direction": direction, "movement_type": mtype,
+                    "reason": f"BEST EFFORT - Sab rule pass nahi hua ({_why_q}) - Score {_score}% - Chain bhi nahi aaya, Token check karo", "expiry": expiry or "",
+                    "pattern": str(row.get("Pattern", "")), "movement_detail": str(row.get("Movement Detail", "")), "session": str(row.get("Session Story", ""))}
+        lot = get_lot_for_stock(stock)
+        check_df, best = check_all_strikes(chain_df, lot, ltp, direction, budget=5000)
+        if best is None:
+            return {"status": "NO_FIT", "stock": stock, "ltp": ltp, "prob": prob, "score": _score, "direction": direction, "movement_type": mtype,
+                    "reason": f"BEST EFFORT - Sab rule pass nahi hua ({_why_q}) - Score {_score}% - Rs 5000 wala strike bhi nahi mila", "expiry": expiry or "",
+                    "pattern": str(row.get("Pattern", "")), "movement_detail": str(row.get("Movement Detail", "")), "session": str(row.get("Session Story", "")), "lot": lot}
+        entry = safe_float(best.get("Premium", 0))
+        strike = safe_int(best.get("Strike", 0))
+        opt_type = str(best.get("Type", "CE"))
+        sl, target, sl_f, tg_f, note = calc_sl_target_for_call(entry, mtype, news_bias, opt_type)
+        cost = safe_float(best.get("1 Lot Cost", 0))
+        max_loss = round((entry - sl) * safe_float(lot), 0)
+        max_profit = round((target - entry) * safe_float(lot), 0)
+        rule_line = f"Gap {safe_float(row.get('Gap %',0)):+.2f}% ({row.get('Gap','')}) | VWAP {row.get('VWAP_OK','')} (LTP {ltp:.1f} vs VWAP {safe_float(row.get('VWAP',0)):.1f}) | ORB {row.get('ORB','')} | Volume {safe_float(row.get('Vol x',0)):.2f}x ({row.get('Volume','')}) | Movement {row.get('Movement Started?','')} | Pass {row.get('Pass','')}"
+        return {"status": "BEST_EFFORT", "stock": stock, "ltp": ltp, "prob": prob, "score": _score, "direction": direction, "opt_type": opt_type, "strike": strike,
+                "entry": entry, "sl": sl, "target": target, "cost": cost, "lot": lot, "expiry": expiry or "", "movement_type": mtype,
+                "movement_detail": str(row.get("Movement Detail", "")), "session": str(row.get("Session Story", "")), "pattern": str(row.get("Pattern", "")),
+                "rule_line": rule_line, "adjust_note": note, "max_loss": max_loss, "max_profit": max_profit,
+                "reason": f"BEST EFFORT - Sab rule pass nahi hua ({_why_q}) - Score {_score}% hai, pakka setup nahi - apne risk pe lo, chhota lot lo"}
+    except Exception as e:
+        return {"status": "NO_TRADE", "stock": str(row.get("Stock", "")) if hasattr(row, "get") else "", "reason": f"BEST EFFORT banane me error - {e}", "expiry": expiry or ""}
+
+
 def build_trade_call(row, chain_df, expiry, news_bias):
     # Ek hi jagah se poora trade banega: Rule check -> Chain -> Rs 5000 wala Strike -> Entry / SL / Target -> Buy / Sell
     # row = df_scan ki ek row (dict jaisa) ya Series, chain_df = IND se aayi chain, expiry = IND se aayi expiry
@@ -3509,6 +3635,10 @@ def save_trade(trade):
     try:
         _ensure_diary_csv()
         df = pd.read_csv(CSV_FILE)
+        # V36 - FIX: purani CSV ke float wale columns ko saaf karo, nahi to nayi row judte waqt dtype ladega
+        for _c in ["status", "exit_time", "reason", "conditions", "symbol", "opt_type", "date", "time"]:
+            if _c in df.columns:
+                df[_c] = df[_c].astype(object)
         # id banao - max+1
         try:
             next_id = int(df["id"].max()) + 1 if len(df) > 0 and pd.notna(df["id"].max()) else 1
@@ -3575,6 +3705,13 @@ def update_trade_exit(trade_id, exit_price, status="EXITED"):
     try:
         _ensure_diary_csv()
         df = pd.read_csv(CSV_FILE)
+        # V36 - FIX: Photo wali error - "Invalid value '12:12:40' for dtype 'float64'" - exit_time float ban gaya tha, usme string nahi ja raha tha
+        for _c in ["status", "exit_time", "reason", "conditions", "symbol", "opt_type", "date", "time"]:
+            if _c in df.columns:
+                df[_c] = df[_c].astype(object)
+        for _c in ["exit_price", "pnl", "entry", "sl", "target"]:
+            if _c in df.columns:
+                df[_c] = pd.to_numeric(df[_c], errors="coerce")
         idx = df[df["id"] == trade_id].index
         if len(idx) > 0:
             i = idx[0]
@@ -3600,6 +3737,13 @@ def update_trade_status(trade_id, status, exit_price, pnl):
     try:
         _ensure_diary_csv()
         df = pd.read_csv(CSV_FILE)
+        # V36 - FIX: wahi dtype wali error - string column ko pehle object me badlo, phir .at se likho
+        for _c in ["status", "exit_time", "reason", "conditions", "symbol", "opt_type", "date", "time"]:
+            if _c in df.columns:
+                df[_c] = df[_c].astype(object)
+        for _c in ["exit_price", "pnl", "entry", "sl", "target"]:
+            if _c in df.columns:
+                df[_c] = pd.to_numeric(df[_c], errors="coerce")
         idx = df[df["id"] == trade_id].index
         if len(idx) > 0:
             i = idx[0]
@@ -4062,7 +4206,7 @@ with st.expander("History", expanded=False):
             _nstocks_h = int(_df_h["STOCK"].nunique()) if _df_h is not None and not _df_h.empty and "STOCK" in _df_h.columns else 0
             _rows_h.append({"Timeframe": _tf_h, "Mahina": _mm_h, "Candles": _n_h, "Stocks": _nstocks_h, "File": f"data/history/{_tf_h}/{_mm_h}.csv"})
         st.dataframe(pd.DataFrame(_rows_h), use_container_width=True, hide_index=True)
-        st.write("5min = ORB + VWAP | 15min = Trend confirm | 1H = Trend | 4H = Trend | Daily = ATR + Trend")
+        st.write("5min = ORB + VWAP | 15min = Trend confirm | 1H = Trend | 4H = Trend | Daily = ATR + Trend | Weekly = Trend")
         if st.session_state.get("last_cache_msg"):
             st.write(f"**Last Scan ke baad Save:** {st.session_state.get('last_cache_msg')}")
     except Exception as e:
@@ -4089,6 +4233,30 @@ if st.button("Scan", use_container_width=True):
         st.session_state.scan_df = df_step1
         st.session_state.step1_debug = debug1
         st.session_state.scan_time = datetime.now().strftime("%H:%M:%S")
+        # V36 - Pichhle Diary se seekh ke Score badlo - delete nahi, seekhna hai - jo stock Diary me haara, uska Score -10, jeeta to +5
+        try:
+            _adj, _learn_df, _learn_txt = learn_from_past()
+            st.session_state["learn_summary"] = _learn_txt
+            st.session_state["learn_df"] = _learn_df
+            if _adj and not df_step1.empty and "Stock" in df_step1.columns and "Probability %" in df_step1.columns:
+                _new_probs = []
+                _seekha = []
+                for _i in range(len(df_step1)):
+                    _stk = str(df_step1.iloc[_i]["Stock"]).upper()
+                    _pr = safe_float(df_step1.iloc[_i]["Probability %"])
+                    if _stk in _adj:
+                        _a, _r = _adj[_stk]
+                        _new_probs.append(max(0, min(100, _pr + _a)))
+                        _seekha.append(_r)
+                    else:
+                        _new_probs.append(_pr)
+                        _seekha.append("")
+                df_step1["Probability %"] = _new_probs
+                df_step1["Seekha"] = _seekha
+                df_step1 = df_step1.sort_values("Probability %", ascending=False).reset_index(drop=True)
+                st.session_state.scan_df = df_step1
+        except Exception as _e_learn:
+            st.session_state["learn_summary"] = f"Seekhne me error - {_e_learn}"
         selected = []
         if not df_step1.empty:
             _top15 = df_step1.head(15)["Stock"].tolist() if "Stock" in df_step1.columns else []
@@ -4197,6 +4365,13 @@ if st.button("Scan", use_container_width=True):
                 _final_chain = _cmap_top[_fstock].get("chain", pd.DataFrame())
                 _final_expiry = _cmap_top[_fstock].get("expiry", "")
             _top_call = build_trade_call(_final_row, _final_chain, _final_expiry, _nb)
+            # V36 - Koi rule pass nahi karta to bhi 1 stock do - BEST EFFORT - khali mat chhodo, Score ke saath bata do pakka nahi hai
+            if _top_call.get("status") == "NO_TRADE":
+                try:
+                    _adj_top = learn_from_past()[0].get(_fstock, (0, ""))[0]
+                except:
+                    _adj_top = 0
+                _top_call = build_best_effort_call(_final_row, _final_chain, _final_expiry, _nb, _adj_top)
             # Session me sirf scalar rakhenge - chain DataFrame dobara chain_map se milegi
             st.session_state["top_call"] = _top_call
             st.session_state["top_call_stock"] = _fstock
@@ -4253,11 +4428,19 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             _fchain2 = _cmap_top2.get(_fstock2, {}).get("chain", pd.DataFrame()) if _fstock2 in _cmap_top2 else pd.DataFrame()
             _fexp2 = _cmap_top2.get(_fstock2, {}).get("expiry", "") if _fstock2 in _cmap_top2 else ""
             _final_call = build_trade_call(_frow, _fchain2, _fexp2, _news_bias_top)
+            if _final_call.get("status") == "NO_TRADE":
+                try:
+                    _adj_fc = learn_from_past()[0].get(_fstock2, (0, ""))[0]
+                except:
+                    _adj_fc = 0
+                _final_call = build_best_effort_call(_frow, _fchain2, _fexp2, _news_bias_top, _adj_fc)
             st.session_state["top_call"] = _final_call
     except Exception as _e_fc:
         _final_call = {"status": "NO_TRADE", "stock": "", "reason": f"FINAL CALL me error - {_e_fc}", "expiry": ""}
     st.markdown("### Best Stock")
     st.write(f"News: {_news_bias_top}")
+    if st.session_state.get("learn_summary"):
+        st.write(f"Seekha: {st.session_state.get('learn_summary')}")
     if _final_call and _final_call.get("status") == "TRADE":
         st.success(f"BUY KARO: {_final_call['stock']} {_final_call['strike']} {_final_call['opt_type']} @ Rs {_final_call['entry']} - Expiry: {_final_call['expiry']} - 1 Lot Cost Rs {_final_call['cost']:.0f} (Lot {_final_call['lot']})")
         st.write(f"**BUY:** Rs {_final_call['entry']} pe BUY karo | **SELL (Target):** Rs {_final_call['target']} pe SELL karo | **STOP LOSS:** Rs {_final_call['sl']} pe nikal jao - SL se neeche mat ruko")
@@ -4274,6 +4457,25 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         with _c2:
             if st.button("Diary", use_container_width=True, key="final_call_diary"):
                 save_trade(_fc_sugg); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
+    elif _final_call and _final_call.get("status") == "BEST_EFFORT":
+        # V36 - Sab rule pass nahi hua, par Top me sabse behtar yahi hai - 1 stock to do, Score ke saath, neeche Telegram bhi hai
+        st.warning(f"BEST EFFORT - Sab rule pass nahi hua - Score {_final_call.get('score',0)}% - Pakka setup nahi, apne risk pe lo, chhota lot lo")
+        st.write(f"Wajah: {_final_call.get('reason','')}")
+        st.success(f"BUY KARO: {_final_call['stock']} {_final_call['strike']} {_final_call['opt_type']} @ Rs {_final_call['entry']} - Expiry: {_final_call['expiry']} - 1 Lot Cost Rs {_final_call['cost']:.0f} (Lot {_final_call['lot']})")
+        st.write(f"**BUY:** Rs {_final_call['entry']} pe BUY karo | **SELL (Target):** Rs {_final_call['target']} pe SELL karo | **STOP LOSS:** Rs {_final_call['sl']} pe nikal jao")
+        st.write(f"Max Profit: Rs {_final_call['max_profit']:.0f} | Max Loss: Rs {_final_call['max_loss']:.0f} | Prob: {_final_call['prob']:.0f}/100 | Score: {_final_call.get('score',0)}% | Direction: {_final_call['direction']} | Stock LTP Rs {_final_call['ltp']:.1f}")
+        st.write(f"{_final_call.get('rule_line','')}")
+        st.write(f"Movement: {_final_call['movement_type']} - {_final_call.get('movement_detail','')} | Session: {_final_call.get('session','')}")
+        st.write(f"{_final_call.get('adjust_note','')}")
+        _fc_sugg2 = {"date": datetime.now().strftime("%Y-%m-%d"), "time": datetime.now().strftime("%H:%M:%S"), "symbol": _final_call['stock'], "strike": _final_call['strike'], "opt_type": _final_call['opt_type'], "entry": float(_final_call['entry']), "sl": float(_final_call['sl']), "target": float(_final_call['target']), "qty_lots": 1, "qty_total": int(_final_call['lot']), "capital_used": float(_final_call['cost']), "risk": float(_final_call['max_loss']), "status": "OPEN", "reason": f"BEST EFFORT - Score {_final_call.get('score',0)}% - {_final_call.get('reason','')}", "conditions": ""}
+        _c1b, _c2b = st.columns(2)
+        with _c1b:
+            if st.button("Telegram", use_container_width=True, key="best_effort_notify"):
+                _ok_be = send_strike(_final_call['stock'], _final_call['strike'], _final_call['opt_type'], _final_call['entry'], _final_call['sl'], _final_call['target'], _final_call['cost'], _final_call['lot'], _final_call['expiry'], str(_final_call['movement_type']))
+                st.success("Chala gaya ✅") if _ok_be else st.error("Nahi gaya ❌")
+        with _c2b:
+            if st.button("Diary", use_container_width=True, key="best_effort_diary"):
+                save_trade(_fc_sugg2); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
     elif _final_call and _final_call.get("status") == "NO_CHAIN":
         st.error(f"Rule pass hai - {_final_call.get('stock','')} - Prob {_final_call.get('prob',0):.0f}/100 - {_final_call.get('movement_type','')}")
         st.write(f"Wajah: {_final_call.get('reason','')}")
