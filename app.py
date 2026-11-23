@@ -662,7 +662,32 @@ def download_monthly_master_all(token):
                 pass
     except Exception as e:
         results.append(("IND_Universe_216.csv", None, pd.DataFrame(), False, f"Universe banane me Error - {e}"))
-    return results, "Master + Scrip-Code + Expiry - GitHub me jama ho gaya - Ab search turant hoga"
+    # V34 - History bhi isi Download me - 5 timeframe, mahina-wise, data/history/... me
+    try:
+        _uni_stocks = []
+        try:
+            if _udf is not None and not _udf.empty and "STOCK" in _udf.columns:
+                _uni_stocks = [str(x).strip().upper() for x in _udf["STOCK"].tolist() if str(x).strip()]
+        except:
+            pass
+        _scrip_map_hist = {}
+        try:
+            for _lr in (lookup_rows or []):
+                _k = str(_lr.get("STOCK", "") or "").strip().upper()
+                _v = str(_lr.get("SECURITY_ID", "") or "").strip()
+                if _k and _v:
+                    _scrip_map_hist[_k] = _v
+        except:
+            pass
+        if not _uni_stocks and _scrip_map_hist:
+            _uni_stocks = list(_scrip_map_hist.keys())[:216]
+        if _uni_stocks and _scrip_map_hist:
+            _hist_results = download_history_tf_month(token, _uni_stocks, _scrip_map_hist)
+            for _tf, _mm, _ok, _msg in _hist_results:
+                results.append((f"history/{_tf}/{_mm}.csv", None, pd.DataFrame(), _ok, _msg))
+    except Exception as e:
+        results.append(("history", None, pd.DataFrame(), False, f"History download me error - {e}"))
+    return results, "Master + Scrip-Code + Expiry + History (5 timeframe, mahina-wise) - GitHub me jama ho gaya - Ab search turant hoga"
 
 def get_expiry_from_master_file(stock_name, token=None):
     # V21 - Expiry ab baar-baar API se mat khojo, Master File (FNO) se hi le lo.
@@ -1152,6 +1177,164 @@ def get_scan_universe_216(token=None):
 HISTORY_DAILY_FILE = "IND_History_Daily.csv"
 HISTORY_TODAY_FILE = "IND_History_Today.csv"
 
+# ---------------- V34 - TIMEFRAME + MAHINA WISE HISTORY ----------------
+# Download ek baar dabao to sab aa jaye, live me sirf wahi file khule jo chahiye.
+# Layout (data/ ke andar, bahar nahi):
+#   data/history/5min/2026-11.csv    - 5-min candles, Nov 2026, sab stocks ek hi file me
+#   data/history/15min/2026-11.csv  - 15-min candles
+#   data/history/1hour/2026-11.csv  - 1H candles
+#   data/history/4hour/2026-11.csv  - 4H candles
+#   data/history/daily/2026-11.csv  - Daily candles
+# Ek file me sab stocks - alag-alag stock ki 216 file nahi banegi, warna folder bhar jayega.
+# Sirf ye 5 timeframe - 1min extra hai, wo live me hi mangenge, save nahi karenge.
+HISTORY_DIR = "history"
+TF_LIST = ["5min", "15min", "1hour", "4hour", "daily"]
+TF_API = {"5min": "5minute", "15min": "15minute", "1hour": "1hour", "4hour": "4hour", "daily": "1day"}
+def tf_month_path(tf, yyyymm):
+    # _push_master ko ye path denge - wo aage data/ laga dega -> data/history/5min/2026-11.csv
+    return f"{HISTORY_DIR}/{tf}/{yyyymm}.csv"
+def tf_yyyymm(dt):
+    try:
+        return pd.to_datetime(dt).strftime("%Y-%m")
+    except:
+        return datetime.now(IST).strftime("%Y-%m")
+def tf_rows_from_candles_df(df, stock):
+    # ind_candles_to_df wala format (Time/Open/High/Low/Close/Volume) -> save wala format (STOCK/TIME/OPEN/HIGH/LOW/CLOSE/VOLUME)
+    try:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        _d = df.copy()
+        _d["Time"] = pd.to_datetime(_d["Time"], errors="coerce")
+        _d = _d.dropna(subset=["Time"])
+        if _d.empty:
+            return pd.DataFrame()
+        return pd.DataFrame({
+            "STOCK": str(stock).upper(),
+            "TIME": _d["Time"].dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "OPEN": pd.to_numeric(_d["Open"], errors="coerce").fillna(0),
+            "HIGH": pd.to_numeric(_d["High"], errors="coerce").fillna(0),
+            "LOW": pd.to_numeric(_d["Low"], errors="coerce").fillna(0),
+            "CLOSE": pd.to_numeric(_d["Close"], errors="coerce").fillna(0),
+            "VOLUME": pd.to_numeric(_d["Volume"], errors="coerce").fillna(0),
+        })
+    except:
+        return pd.DataFrame()
+def tf_candles_for_stock(tf_df, stock, trading_day=None):
+    # Save wali file se ek stock ki candles -> analyze wala format (Time/Open/High/Low/Close/Volume)
+    # trading_day diya ho to sirf us din ki, nahi diya to sab
+    try:
+        if tf_df is None or tf_df.empty or "STOCK" not in tf_df.columns:
+            return pd.DataFrame()
+        _sub = tf_df[tf_df["STOCK"].astype(str).str.upper() == str(stock).upper()].copy()
+        if _sub.empty:
+            return pd.DataFrame()
+        # Daily purani file me DATE hota hai, nayi me TIME - dono chalenge
+        if "TIME" in _sub.columns:
+            _sub["Time"] = pd.to_datetime(_sub["TIME"].astype(str), errors="coerce")
+        elif "DATE" in _sub.columns:
+            _sub["Time"] = pd.to_datetime(_sub["DATE"].astype(str), errors="coerce")
+        else:
+            return pd.DataFrame()
+        _sub = _sub.dropna(subset=["Time"])
+        if trading_day is not None:
+            _sub = _sub[_sub["Time"].dt.date == trading_day]
+        if _sub.empty:
+            return pd.DataFrame()
+        _sub = _sub.sort_values("Time")
+        return pd.DataFrame({
+            "Time": _sub["Time"],
+            "Open": pd.to_numeric(_sub["OPEN"], errors="coerce").fillna(0),
+            "High": pd.to_numeric(_sub["HIGH"], errors="coerce").fillna(0),
+            "Low": pd.to_numeric(_sub["LOW"], errors="coerce").fillna(0),
+            "Close": pd.to_numeric(_sub["CLOSE"], errors="coerce").fillna(0),
+            "Volume": pd.to_numeric(_sub["VOLUME"], errors="coerce").fillna(0) if "VOLUME" in _sub.columns else 0,
+        })
+    except:
+        return pd.DataFrame()
+def load_tf_month(tf, yyyymm):
+    # Ek timeframe + ek mahina ki file - Session -> Local data/history/... -> GitHub Raw -> Purani file (fallback)
+    # Returns df (STOCK/TIME/OPEN...), khali ho to empty df
+    try:
+        import streamlit as _st
+        _key = f"tf_{tf}_{yyyymm}"
+        _cached = _st.session_state.get(_key, None)
+        if _cached is not None and not _cached.empty:
+            return _cached
+        # Local - data/history/tf/yyyymm.csv (read_local_csv data/ pehle dekhta hai, par yahan poora path dete hain)
+        _local_rel = tf_month_path(tf, yyyymm)  # history/5min/2026-11.csv
+        for _cand in [APP_DIR / MASTER_FOLDER / _local_rel, Path.cwd() / MASTER_FOLDER / _local_rel, APP_DIR / _local_rel]:
+            try:
+                if _cand.is_file():
+                    _df = pd.read_csv(_cand, dtype=str, keep_default_na=False)
+                    if _df is not None and not _df.empty:
+                        try:
+                            _st.session_state[_key] = _df
+                        except:
+                            pass
+                        return _df
+            except:
+                pass
+        # GitHub Raw - data/history/... pehle, phir history/... (agar kisi ne bahar daal di ho)
+        if GITHUB_TOKEN and GITHUB_REPO:
+            for _try_url in [f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{MASTER_FOLDER}/{_local_rel}", f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{_local_rel}"]:
+                try:
+                    _r = requests.get(_try_url, timeout=10)
+                    if _r.status_code == 200 and len(_r.text.strip()) > 20:
+                        _df = pd.read_csv(io.StringIO(_r.text), dtype=str, keep_default_na=False)
+                        if _df is not None and not _df.empty:
+                            try:
+                                _st.session_state[_key] = _df
+                            except:
+                                pass
+                            return _df
+                except:
+                    continue
+        # Purani file fallback - 5min ke liye Today file, daily ke liye Daily file - taaki dobara Download kiye bina bhi scan chale
+        if tf == "5min":
+            _old, _m = read_local_csv(HISTORY_TODAY_FILE)
+            if _old is not None and not _old.empty:
+                return _old
+        if tf == "daily":
+            _old, _m = read_local_csv(HISTORY_DAILY_FILE)
+            if _old is not None and not _old.empty:
+                return _old
+        return pd.DataFrame()
+    except:
+        return pd.DataFrame()
+def save_tf_month(tf, yyyymm, new_rows_df):
+    # Nayi candles purani file me jodo - duplicate STOCK+TIME hatao, nayi jeetegi - phir data/history/... me save karo
+    # Returns (ok, msg)
+    try:
+        import streamlit as _st
+        if new_rows_df is None or new_rows_df.empty:
+            return False, f"{tf} {yyyymm}: nayi candles nahi thi"
+        _old = load_tf_month(tf, yyyymm)
+        # Purani file Today/Daily wali ho to uska format alag hai (DATE) - usko TIME me badal ke merge karo
+        if _old is not None and not _old.empty:
+            if "TIME" not in _old.columns and "DATE" in _old.columns:
+                _old = _old.copy()
+                _old["TIME"] = _old["DATE"].astype(str) + " 00:00:00"
+                _old = _old[["STOCK", "TIME", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]] if all(c in _old.columns for c in ["STOCK", "TIME", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]) else _old
+            _merged = pd.concat([_old, new_rows_df], ignore_index=True)
+        else:
+            _merged = new_rows_df.copy()
+        # Sirf zaroori columns, duplicate hatao, sort karo - file saaf rahegi, extra nahi
+        _keep = ["STOCK", "TIME", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]
+        _merged = _merged[[c for c in _keep if c in _merged.columns]]
+        _merged = _merged.drop_duplicates(subset=["STOCK", "TIME"], keep="last")
+        _merged["TIME_DT"] = pd.to_datetime(_merged["TIME"].astype(str), errors="coerce")
+        _merged = _merged.dropna(subset=["TIME_DT"]).sort_values(["STOCK", "TIME_DT"]).drop(columns=["TIME_DT"])
+        _ok, _m = _push_master_to_github(tf_month_path(tf, yyyymm), _merged.to_csv(index=False).encode("utf-8"))
+        if _ok:
+            try:
+                _st.session_state[f"tf_{tf}_{yyyymm}"] = _merged
+            except:
+                pass
+            return True, f"{tf} {yyyymm}: {len(_merged)} candles - {len(new_rows_df)} nayi jodi"
+        return False, f"{tf} {yyyymm}: save fail - {_m}"
+    except Exception as e:
+        return False, f"{tf} {yyyymm}: save error - {e}"
+
 def load_history_cache_from_github():
     # GitHub se dono Cache File laao - raw.githubusercontent se - agar nahi mili to khali DataFrame
     # Returns (daily_df, today_df, msg)
@@ -1365,9 +1548,33 @@ def update_history_cache_after_scan(scan_rows_by_stock, trading_day):
             # Aaj ka din Daily me chala gaya to Today ko saaf kar do - kal se naya Today shuru hoga
             if _daily_added > 0:
                 today_df = pd.DataFrame(columns=["STOCK", "TIME", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"])
-        # GitHub me save karo - sirf tab jab kuch naya aaya hai
-        _save_msg = save_history_cache_to_github(daily_df, today_df)
-        return daily_df, today_df, f"History Cache update - Today +{len(_new_today_rows)} candles, Daily +{_daily_added} din - {_save_msg}"
+        # V34 - Sirf TF-month files me save karo - purani 2 file me nahi, warna duplicate hoga, folder bhar jayega
+        _save_msgs = []
+        if _new_today_rows:
+            try:
+                _tf5 = pd.DataFrame(_new_today_rows)
+                _ok5, _m5 = save_tf_month("5min", tf_yyyymm(trading_day), _tf5)
+                _save_msgs.append(f"5min: {_m5}")
+            except Exception as _e5:
+                _save_msgs.append(f"5min save error - {_e5}")
+        if _is_market_closed and _daily_added > 0:
+            try:
+                _drows = []
+                for _stock2, _df5b in (scan_rows_by_stock or {}).items():
+                    try:
+                        if _df5b is None or _df5b.empty:
+                            continue
+                        _o2 = safe_float(_df5b.iloc[0]["Open"]); _h2 = safe_float(_df5b["High"].max()); _l2 = safe_float(_df5b["Low"].min()); _c2 = safe_float(_df5b.iloc[-1]["Close"]); _v2 = safe_float(pd.to_numeric(_df5b["Volume"], errors="coerce").fillna(0).sum())
+                        _drows.append({"STOCK": str(_stock2).upper(), "TIME": trading_day.strftime("%Y-%m-%d 15:30:00"), "OPEN": _o2, "HIGH": _h2, "LOW": _l2, "CLOSE": _c2, "VOLUME": _v2})
+                    except:
+                        continue
+                if _drows:
+                    _okD, _mD = save_tf_month("daily", tf_yyyymm(trading_day), pd.DataFrame(_drows))
+                    _save_msgs.append(f"daily: {_mD}")
+            except Exception as _eD:
+                _save_msgs.append(f"daily save error - {_eD}")
+        _save_msg = " | ".join(_save_msgs) if _save_msgs else "Kuch naya nahi tha"
+        return daily_df, today_df, f"History update - 5min +{len(_new_today_rows)} candles, Daily +{_daily_added} din - {_save_msg}"
     except Exception as e:
         return pd.DataFrame(), pd.DataFrame(), f"History Cache update me Error - {e}"
 
@@ -1758,6 +1965,55 @@ def ind_historical_5x5_with_retry(symbols_with_scrip, interval, start_ms, end_ms
         # Wo 5 khatam, ab wapas agle 5-5 pe jayenge - loop apne aap agle chunk pe jayega
         logs.append(f"Batch {ci} khatam - Ab agle 5-5 pe jayenge")
     return result, logs
+
+def download_history_tf_month(token, universe_stocks, scrip_map_dict):
+    # V34 - Download me hi 5 timeframe ki history le lo - mahina-wise, data/history/... me.
+    # Daily: 216 stocks (ATR ke liye sab chahiye). Intraday (5min/15min/1H/4H): pehle 100 stocks - baaki ka jab Top 15 me aayega to live se aa jayega.
+    # Lookback: 5min 7 din (API max), 15min 30 din, 1H 30 din, 4H 60 din, Daily 35 din.
+    # Pehli baar poora lookback, agli baar save_tf_month purani candles se merge karke sirf nayi jodta hai - dobara download nahi hota.
+    # Returns [(tf, yyyymm, ok, msg)]
+    _out = []
+    try:
+        if not token or not universe_stocks or not scrip_map_dict:
+            return [("all", "", False, "History: stocks ya scrip khali")]
+        _trading_day = get_trading_day()
+        _s, _scan_end = get_scan_window(_trading_day)
+        _lookbacks = {"5min": 7, "15min": 30, "1hour": 30, "4hour": 60, "daily": 35}
+        for _tf in TF_LIST:
+            try:
+                _stocks = list(universe_stocks) if _tf == "daily" else list(universe_stocks)[:100]
+                _pairs = []
+                for _sname in _stocks:
+                    _sid = str(scrip_map_dict.get(str(_sname).upper(), "") or "").strip()
+                    if _sid and _sid.lower() != "nan":
+                        _pairs.append((str(_sname).upper(), _sid))
+                if not _pairs:
+                    continue
+                _start_dt = _scan_end - timedelta(days=_lookbacks[_tf])
+                _res, _logs = ind_historical_5x5_with_retry(_pairs, TF_API[_tf], to_ms(_start_dt), to_ms(_scan_end), token)
+                _by_month = {}
+                for _sym, _r in (_res or {}).items():
+                    _candles = (_r or {}).get("candles", []) or []
+                    if not _candles:
+                        continue
+                    _df_c = ind_candles_to_df(_candles)
+                    _rows = tf_rows_from_candles_df(_df_c, _sym)
+                    if _rows.empty:
+                        continue
+                    _rows["MM"] = pd.to_datetime(_rows["TIME"].astype(str), errors="coerce").dt.strftime("%Y-%m")
+                    for _mm, _sub in _rows.groupby("MM"):
+                        if not _mm or str(_mm) == "nan":
+                            continue
+                        _by_month.setdefault(str(_mm), []).append(_sub.drop(columns=["MM"]))
+                for _mm, _parts in _by_month.items():
+                    _merged = pd.concat(_parts, ignore_index=True)
+                    _ok, _msg = save_tf_month(_tf, _mm, _merged)
+                    _out.append((_tf, _mm, _ok, _msg))
+            except Exception as _e_tf:
+                _out.append((_tf, "", False, f"{_tf}: error - {_e_tf}"))
+        return _out
+    except Exception as e:
+        return [("all", "", False, f"History download error - {e}")]
 
 
 def ind_get_scrip(symbol, token, scrip_map=None):
@@ -2317,13 +2573,21 @@ def ind_fill_for_selected(selected_stocks, token, scrip_map):
         # - Daily (1day, 35 din): Agar Cache me 14+ din ka Daily summary hai to IND se 1day mat mango - Cache se hi ATR / Trend ban jayega. Historical kabhi badalta nahi.
         # - 5minute Aaj ka: Agar Cache me Aaj ka 09:15 se Last Cached Time tak ka candle hai to sirf Last Cached Time se Abhi Tak ka Delta mango - poora din dobara mat mango.
         # - 1 ghanta baad dobara scan kiya to 80% data Cache se aa jayega, IND se sirf 1 ghante ka Delta + LTP aayega - isliye 5 min wala scan 1 min me ho jayega.
-        _daily_cache, _today_cache, _cache_msg = load_history_cache_from_github()
-        logs_all.append(f"History Cache: {_cache_msg}")
+        # V34 - TF-month files se lo - sirf wahi file khulegi jo chahiye: Daily = is mahine + pichhla mahina (14 din ke liye), 5min = is mahine ki file se aaj ka din
+        _cur_mm = tf_yyyymm(trading_day)
+        _prev_mm = tf_yyyymm(trading_day - timedelta(days=32))
+        _daily_tf = load_tf_month("daily", _cur_mm)
+        if _prev_mm != _cur_mm:
+            _daily_prev = load_tf_month("daily", _prev_mm)
+            if _daily_prev is not None and not _daily_prev.empty:
+                _daily_tf = pd.concat([_daily_prev, _daily_tf], ignore_index=True) if _daily_tf is not None and not _daily_tf.empty else _daily_prev
+        _today_tf = load_tf_month("5min", _cur_mm)
+        logs_all.append(f"History: daily {_cur_mm}+{_prev_mm} {len(_daily_tf) if _daily_tf is not None else 0} rows, 5min {_cur_mm} {len(_today_tf) if _today_tf is not None else 0} rows")
         # Daily - Cache wale alag, Cache me nahi wale alag
         _pairs_need_daily_api = []
         _cached_daily_by_stock = {}
         for _sym, _sid in pairs:
-            _cdf = daily_df_from_cache_for_stock(_sym, _daily_cache)
+            _cdf = tf_candles_for_stock(_daily_tf, _sym)
             if _cdf is not None and len(_cdf) >= 14:
                 _cached_daily_by_stock[_sym] = _cdf
             else:
@@ -2333,7 +2597,8 @@ def ind_fill_for_selected(selected_stocks, token, scrip_map):
         _cached_today_by_stock = {}
         _last_cached_by_stock = {}
         for _sym, _sid in pairs:
-            _ctdf, _last = today_candles_from_cache_for_stock(_sym, _today_cache, trading_day)
+            _ctdf = tf_candles_for_stock(_today_tf, _sym, trading_day)
+            _last = _ctdf["Time"].max() if _ctdf is not None and not _ctdf.empty else None
             if _ctdf is not None and not _ctdf.empty:
                 _cached_today_by_stock[_sym] = _ctdf
                 _last_cached_by_stock[_sym] = _last
@@ -3637,21 +3902,23 @@ with st.expander("Universe (216)", expanded=False):
 
 
 # ---------------- V26 - HISTORY CACHE STATUS - GitHub se pichhla data kitna mila? ----------------
-with st.expander("History Cache", expanded=False):
+with st.expander("History", expanded=False):
     try:
-        _dc, _tc, _cmsg = load_history_cache_from_github()
-        st.write(f"{_cmsg}")
-        st.write("")
-        if _dc is not None and not _dc.empty:
-            st.write(f"**Daily Cache:** {len(_dc)} rows - Har row = 1 stock x 1 din - STOCK/DATE/OPEN/HIGH/LOW/CLOSE/GAP/VWAP/ORB/VOL_X/MOVEMENT/GREEN/RED")
-            st.dataframe(_dc.tail(20), use_container_width=True, hide_index=True)
-        if _tc is not None and not _tc.empty:
-            st.write(f"**Today Cache:** {len(_tc)} candles - Aaj ka 5-min candle - STOCK/TIME/OPEN/HIGH/LOW/CLOSE/VOLUME - Din khatam hote hi Daily me chala jayega")
-            st.dataframe(_tc.tail(20), use_container_width=True, hide_index=True)
+        # V34 - Sirf is mahine ki 5 file dikhao - jo file chahiye wahi khulegi, poora folder nahi
+        _td_h = get_trading_day()
+        _mm_h = tf_yyyymm(_td_h)
+        _rows_h = []
+        for _tf_h in TF_LIST:
+            _df_h = load_tf_month(_tf_h, _mm_h)
+            _n_h = len(_df_h) if _df_h is not None else 0
+            _nstocks_h = int(_df_h["STOCK"].nunique()) if _df_h is not None and not _df_h.empty and "STOCK" in _df_h.columns else 0
+            _rows_h.append({"Timeframe": _tf_h, "Mahina": _mm_h, "Candles": _n_h, "Stocks": _nstocks_h, "File": f"data/history/{_tf_h}/{_mm_h}.csv"})
+        st.dataframe(pd.DataFrame(_rows_h), use_container_width=True, hide_index=True)
+        st.write("5min = ORB + VWAP | 15min = Trend confirm | 1H = Trend | 4H = Trend | Daily = ATR + Trend")
         if st.session_state.get("last_cache_msg"):
-            st.write(f"**Last Scan ke baad Cache Save:** {st.session_state.get('last_cache_msg')}")
+            st.write(f"**Last Scan ke baad Save:** {st.session_state.get('last_cache_msg')}")
     except Exception as e:
-        st.write(f"History Cache UI me Error - {e}")
+        st.write(f"History UI me Error - {e}")
 
 if st.button("Scan", use_container_width=True):
     # V24 - SIRF IND SE SCAN - Yahoo / NSE band. Docs wala pattern hi sab jagah.
