@@ -968,6 +968,13 @@ def calc_probability_breakdown(ana):
     side_pts = -15 if side else 0
     total += side_pts
     rows.append({"Criteria": "KATOTI: Sideways", "Value": mov_type, "Pass?": "❌ KATA" if side else "✅ SAHI", "Ank": side_pts, "Max": 0, "Kahan se Check Hua": "IND se"})
+    # V40 - Gemini sahi tha: Fake -30 + Choppy -20 + Sideways -15 = -65 ho jata tha, mazboot stock bhi 5-10 pe aa jata tha
+    # Katoti kabhi -30 se zyada nahi hogi - taaki ek hi wajah se stock poora khatam na ho
+    _kat_total = fake_pts + choppy_pts + side_pts
+    if _kat_total < -30:
+        _adj = -30 - _kat_total
+        total += _adj
+        rows.append({"Criteria": "KATOTI CAP: Katoti -30 se zyada nahi", "Value": f"Katoti {_kat_total} thi, cap karke -30 ki", "Pass?": "✅ CAP", "Ank": _adj, "Max": 0, "Kahan se Check Hua": "V40 - Ek hi wajah se stock khatam nahi hoga"})
     total = max(0, min(100, int(total)))
     return pd.DataFrame(rows), total
 
@@ -3884,6 +3891,9 @@ def send_strike(stock, strike, opt_type, entry, sl, target, cost, lot, expiry_st
 
 # ---------------- STRIKE CHECK ----------------
 def check_all_strikes(chain_df, lot, ltp, direction, budget=5000):
+    # V40 - Gemini sahi tha: OI / IV / Bid-Ask data to Chain me aa raha tha, par Strike chunte waqt istemaal hi nahi ho raha tha - sirf Premium + ATM se chunte the
+    # Ab: (1) OI wala filter - OI hai to kam-OI wala (fasne wala) strike nahi lenge, (2) Spread - Bid-Ask zyada hai to Slippage ki chetavni, (3) IV zyada hai to IV Crush ki chetavni
+    # OI data hi nahi aaya to purana tareeka hi chalega - kabhi bhi OI ke chakkar me Trade nahi rokega
     if chain_df is None or chain_df.empty:
         return pd.DataFrame(), None
     lot_f = safe_float(lot); ltp_f = safe_float(ltp)
@@ -3895,9 +3905,44 @@ def check_all_strikes(chain_df, lot, ltp, direction, budget=5000):
         if prem <= 0:
             continue
         cost = round(prem * lot_f, 0); fits = cost <= budget
-        results.append({"Strike": strike, "Type": opt_type, "Premium": prem, "Lot Qty": safe_int(lot_f), "1 Lot Cost": cost, "Fit?": "✅" if fits else "❌", "ATM se Door": round(abs(strike - ltp_f), 1), "Fits": fits, "OI": safe_int(r.get("CE OI", 0) if opt_type == "CE" else r.get("PE OI", 0)), "IV": safe_float(r.get("CE IV", 0) if opt_type == "CE" else r.get("PE IV", 0))})
+        _oi = safe_int(r.get("CE OI", 0) if opt_type == "CE" else r.get("PE OI", 0))
+        _iv = safe_float(r.get("CE IV", 0) if opt_type == "CE" else r.get("PE IV", 0))
+        _bid = safe_float(r.get("CE Bid", 0) if opt_type == "CE" else r.get("PE Bid", 0))
+        _ask = safe_float(r.get("CE Ask", 0) if opt_type == "CE" else r.get("PE Ask", 0))
+        _spread_pct = round(((_ask - _bid) / prem * 100) if prem > 0 and _ask > 0 and _bid > 0 else 0, 1)
+        results.append({"Strike": strike, "Type": opt_type, "Premium": prem, "Lot Qty": safe_int(lot_f), "1 Lot Cost": cost, "Fit?": "✅" if fits else "❌", "ATM se Door": round(abs(strike - ltp_f), 1), "Fits": fits, "OI": _oi, "IV": _iv, "Spread %": _spread_pct})
     df = pd.DataFrame(results).sort_values("ATM se Door") if results else pd.DataFrame()
-    best = df[df["Fits"] == True].sort_values("ATM se Door").iloc[0] if not df.empty and (df["Fits"] == True).any() else None
+    if df.empty or not (df["Fits"] == True).any():
+        return df, None
+    _fits = df[df["Fits"] == True].copy()
+    # OI filter - sirf tab jab OI data aaya hai (koi bhi OI > 0) - kam-OI wale ko hatao, phir ATM ke sabse paas wala lo
+    try:
+        _ois = _fits["OI"].astype(float).tolist()
+        if _ois and max(_ois) > 0:
+            import statistics as _st2
+            _med = _st2.median([_o for _o in _ois if _o > 0]) if any(_o > 0 for _o in _ois) else 0
+            _with_oi = _fits[_fits["OI"] >= _med] if _med > 0 else _fits
+            if not _with_oi.empty:
+                _fits = _with_oi
+    except:
+        pass
+    best = _fits.sort_values("ATM se Door").iloc[0]
+    # Chetavni - Trade nahi rokegi, bas bata degi
+    _notes = []
+    try:
+        if safe_float(best.get("OI", 0)) > 0 and safe_float(best.get("OI", 0)) < 1000:
+            _notes.append("OI kam hai (1000 se kam) - nikalne me der lag sakti hai")
+        if safe_float(best.get("Spread %", 0)) > 20:
+            _notes.append(f"Bid-Ask Spread {safe_float(best.get('Spread %',0)):.0f}% hai - Slippage hoga, Market Order mat lagana, Limit lagana")
+        if safe_float(best.get("IV", 0)) > 40:
+            _notes.append(f"IV {safe_float(best.get('IV',0)):.0f}% zyada hai - IV Crush ka khatra, jaldi nikalna")
+    except:
+        pass
+    if _notes:
+        try:
+            best = best.copy(); best["liq_note"] = " | ".join(_notes)
+        except:
+            pass
     return df, best
 
 # ---------------- V28 - MOOL FUNCTION - FINAL CALL - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target ----------------
@@ -4098,15 +4143,22 @@ def _push_diary_to_github():
         content_b64 = base64.b64encode(csv_text.encode()).decode()
         headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_CSV_PATH}"
-        get_resp = requests.get(url, headers=headers, timeout=10)
-        sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
-        payload = {"message": f"Diary update {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "content": content_b64}
-        if sha:
-            payload["sha"] = sha
-        put_resp = requests.put(url, headers=headers, json=payload, timeout=15)
-        if put_resp.status_code in (200, 201):
-            return True, "GitHub me bhi save ho gaya"
-        return False, f"GitHub Fail {put_resp.status_code} - {put_resp.text[:200]}"
+        # V40 - Network ek baar fail ho to dobara try karo - pehle turant haar maan lete the, isliye Diary kabhi kabhi GitHub me nahi pahunchti thi
+        _last_err = ""
+        for _try in range(2):
+            try:
+                get_resp = requests.get(url, headers=headers, timeout=10)
+                sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
+                payload = {"message": f"Diary update {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "content": content_b64}
+                if sha:
+                    payload["sha"] = sha
+                put_resp = requests.put(url, headers=headers, json=payload, timeout=15)
+                if put_resp.status_code in (200, 201):
+                    return True, "GitHub me bhi save ho gaya"
+                _last_err = f"GitHub Fail {put_resp.status_code} - {put_resp.text[:200]}"
+            except Exception as _e2:
+                _last_err = f"GitHub Error - {_e2}"
+        return False, _last_err
     except Exception as e:
         return False, f"GitHub Error - {e}"
 
@@ -4274,6 +4326,14 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ---------------- TOP BAR ----------------
+# V40 - System Health ek line me - Token / GitHub / Universe / Data - taaki 9:15 pe ek nazar me pata chale sab theek hai ya nahi. Cards / Dark Mode nahi - minimal hi rahega.
+try:
+    _tok_ok = "✅ Token" if st.session_state.get("indmoney_secret", "") else "❌ Token nahi"
+    _gh_ok = "✅ GitHub" if GITHUB_TOKEN and GITHUB_REPO else "❌ GitHub nahi"
+    _uni_n = len(st.session_state.get("universe_216_df", pd.DataFrame())) if st.session_state.get("universe_216_df", None) is not None else 0
+    st.caption(f"{_tok_ok} | {_gh_ok} | Universe: {_uni_n} stocks | Data: INDstocks se")
+except:
+    pass
 top_left, top_right = st.columns([4, 1])
 with top_left:
     st.title("Scan Stock")
