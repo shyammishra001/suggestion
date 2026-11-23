@@ -1,61 +1,50 @@
-# .github/workflows/ai_worker.yml - GitHub me is naam se daalo: .github/workflows/ai_worker.yml
-# AI Worker V2 har 15 min me apne aap chalega - bina bole, market hours me
-# Koi secret is file me nahi hai - sab GitHub Secrets me daalna hai:
-#   TELEGRAM_TOKEN / TELEGRAM_CHAT_ID - crash alert ke liye (purana wala, same)
-#   LLM_API_KEY (optional) - ho to jawab ChatGPT jaisa polish hoga, nahi ho to bhi sab chalega
-#   LLM_PROVIDER (optional) - openai ya gemini | LLM_MODEL (optional) - jaise gpt-4o-mini
-# GITHUB_TOKEN GitHub apne aap deta hai, daalna nahi padta
-#
-# V2 me YAML me kya badla (sirf Python nahi, YAML bhi update hai):
-#   1) File ka naam: ai_worker.py -> ai_worker_v2.py
-#   2) LLM wale env jud gaye (optional - bina inke bhi chalega)
-#   3) permissions: contents: write - taaki worker ai_live / ai_memory / ai_knowledge / ai_brief ko GitHub me save kar sake
-#   4) Manual run me mode chun sakte ho - once / learn / ask (sawal ke saath)
+name: AI Worker
 
-name: AI Worker V2
+# Ye file SIRF is jagah rakho:  .github/workflows/ai-worker.yml
+# "workflow" naam ke folder me rakhoge to GitHub Actions isko kabhi nahi chalayega -
+# isi liye ab tak AI connected nahi hua tha. Folder ka naam .github/workflows hona chahiye,
+# aage dot (.) ke saath.
+#
+# ai_worker.py ko repo ke ROOT me rakho (app.py ke bagal me), workflow folder me nahi.
+# ai_worker.py ko data/ai_live.json me likhna hai - usi ko ye workflow wapas GitHub me push karega.
+#
+# GitHub repo me Secret daalna hai:
+#   Settings -> Secrets and variables -> Actions -> New repository secret
+#   Name: INDSTOCKS_TOKEN   Value: tumhara IND Token (24 ghante wala)
 
 on:
   schedule:
-    # Har 15 min, Som-Shukr, 03:30-10:30 UTC = 09:00-16:00 IST (market hours)
+    # Market time 09:15-15:30 IST = 03:45-10:00 UTC, har 15 min, Mon-Fri
     - cron: "*/15 3-10 * * 1-5"
-    # Subah 8 baje IST = 02:30 UTC - pre-market ek baar
-    - cron: "30 2 * * 1-5"
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Kaunsa kaam karna hai - once (poora run) / learn (sirf seekhna) / ask (sawal poochhna)"
-        required: false
-        default: "once"
-      question:
-        description: "Agar mode = ask hai to sawal yahan likho, jaise RELIANCE kidhar jayega?"
-        required: false
-        default: ""
+  workflow_dispatch:  # Actions tab se haath se bhi chala sakte ho
 
 permissions:
   contents: write
 
 jobs:
-  ai:
+  ai-worker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Repo lo
+        uses: actions/checkout@v4
+
+      - name: Python lagao
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: AI Worker V2 chalao
+
+      - name: Zaroori package
+        run: pip install requests pandas
+
+      - name: AI Worker chalao
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPO: ${{ github.repository }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          INDSTOCKS_TOKEN: ${{ secrets.INDSTOCKS_TOKEN }}
+        run: python ai_worker.py
+
+      - name: ai_live.json wapas GitHub me daalo
         run: |
-          if [ "${{ github.event.inputs.mode }}" = "learn" ]; then
-            python ai_worker_v2.py --learn
-          elif [ "${{ github.event.inputs.mode }}" = "ask" ]; then
-            python ai_worker_v2.py --ask "${{ github.event.inputs.question }}"
-          else
-            python ai_worker_v2.py --once
-          fi
+          git config user.name "ai-worker"
+          git config user.email "ai-worker@github.com"
+          git add data/ai_live.json || true
+          git diff --cached --quiet || git commit -m "AI Live update"
+          git push || true
