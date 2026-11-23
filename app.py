@@ -1188,8 +1188,14 @@ HISTORY_TODAY_FILE = "IND_History_Today.csv"
 # Ek file me sab stocks - alag-alag stock ki 216 file nahi banegi, warna folder bhar jayega.
 # Sirf ye 5 timeframe - 1min extra hai, wo live me hi mangenge, save nahi karenge.
 HISTORY_DIR = "history"
-TF_LIST = ["5min", "15min", "1hour", "4hour", "daily"]
-TF_API = {"5min": "5minute", "15min": "15minute", "1hour": "1hour", "4hour": "4hour", "daily": "1day"}
+# V35 - Kitni candles rakhni hai, har timeframe ki - yahin se badlo (500 / 200 / 1000 jo chahiye)
+# 500 5min = ~7 din | 500 15min = ~20 din | 500 1H = ~80 din | 500 4H = ~1.3 saal | 500 Daily = ~2 saal | 500 Weekly = ~10 saal
+# Isse zyada purani candles apne aap hat jayengi - folder kabhi nahi bharega
+TF_LIST = ["5min", "15min", "1hour", "4hour", "daily", "weekly"]
+TF_API = {"5min": "5minute", "15min": "15minute", "1hour": "1hour", "4hour": "4hour", "daily": "1day", "weekly": "1week"}
+TF_RETENTION = {"5min": 500, "15min": 500, "1hour": 500, "4hour": 500, "daily": 500, "weekly": 500}
+TF_LOOKBACK_DAYS = {"5min": 7, "15min": 30, "1hour": 100, "4hour": 400, "daily": 500, "weekly": 3650}
+TF_DELTA = {"5min": timedelta(minutes=5), "15min": timedelta(minutes=15), "1hour": timedelta(hours=1), "4hour": timedelta(hours=4), "daily": timedelta(days=1), "weekly": timedelta(weeks=1)}
 def tf_month_path(tf, yyyymm):
     # _push_master ko ye path denge - wo aage data/ laga dega -> data/history/5min/2026-11.csv
     return f"{HISTORY_DIR}/{tf}/{yyyymm}.csv"
@@ -1324,6 +1330,13 @@ def save_tf_month(tf, yyyymm, new_rows_df):
         _merged = _merged.drop_duplicates(subset=["STOCK", "TIME"], keep="last")
         _merged["TIME_DT"] = pd.to_datetime(_merged["TIME"].astype(str), errors="coerce")
         _merged = _merged.dropna(subset=["TIME_DT"]).sort_values(["STOCK", "TIME_DT"]).drop(columns=["TIME_DT"])
+        # V35 - Retention: har stock ki sirf aakhri N candles rakho - purani apne aap hat jayegi, folder nahi bharega
+        try:
+            _keep_n = int(TF_RETENTION.get(tf, 500))
+            if _keep_n > 0 and not _merged.empty:
+                _merged = _merged.groupby("STOCK", group_keys=False).tail(_keep_n)
+        except:
+            pass
         _ok, _m = _push_master_to_github(tf_month_path(tf, yyyymm), _merged.to_csv(index=False).encode("utf-8"))
         if _ok:
             try:
@@ -1334,6 +1347,54 @@ def save_tf_month(tf, yyyymm, new_rows_df):
         return False, f"{tf} {yyyymm}: save fail - {_m}"
     except Exception as e:
         return False, f"{tf} {yyyymm}: save error - {e}"
+
+def check_saved_history():
+    # V35 - Download dabane se PEHLE ye chalega - batayega kahan tak data saved hai, uske aage ka hi download hoga
+    # Har timeframe ke liye: is mahine + pichhle 2 mahine ki file dekho, sabse aakhri TIME nikaalo
+    # Returns ({tf: {"last": datetime_or_None, "first": datetime_or_None, "candles": int, "stocks": int}}, DataFrame)
+    _out = {}
+    _rows = []
+    try:
+        _now = ist_now()
+        _months = []
+        for _back in [0, 1, 2]:
+            _d = _now - timedelta(days=32 * _back)
+            _mm = tf_yyyymm(_d)
+            if _mm not in _months:
+                _months.append(_mm)
+        for _tf in TF_LIST:
+            _last = None
+            _first = None
+            _total = 0
+            _stocks = set()
+            for _mm in _months:
+                try:
+                    _df = load_tf_month(_tf, _mm)
+                    if _df is None or _df.empty:
+                        continue
+                    _times = pd.to_datetime(_df["TIME"].astype(str) if "TIME" in _df.columns else _df["DATE"].astype(str), errors="coerce").dropna()
+                    if _times.empty:
+                        continue
+                    _mx = _times.max()
+                    _mn = _times.min()
+                    if _last is None or _mx > _last:
+                        _last = _mx
+                    if _first is None or _mn < _first:
+                        _first = _mn
+                    _total += len(_df)
+                    if "STOCK" in _df.columns:
+                        _stocks.update(_df["STOCK"].astype(str).str.upper().tolist())
+                except:
+                    continue
+            _out[_tf] = {"last": _last, "first": _first, "candles": int(_total), "stocks": len(_stocks)}
+            _rows.append({"Timeframe": _tf, "Rakhna hai": int(TF_RETENTION.get(_tf, 500)), "Saved hai (3 mahine me)": int(_total),
+                          "Stocks": len(_stocks),
+                          "Pehli candle": _first.strftime("%Y-%m-%d %H:%M") if _first is not None else "-",
+                          "Aakhri saved": _last.strftime("%Y-%m-%d %H:%M") if _last is not None else "Kuch nahi saved - pehli baar download hoga"})
+        return _out, pd.DataFrame(_rows)
+    except Exception as e:
+        return {}, pd.DataFrame([{"Timeframe": "Error", "Rakhna hai": "", "Saved hai (3 mahine me)": "", "Stocks": "", "Pehli candle": "", "Aakhri saved": f"Check me error - {e}"}])
+
 
 def load_history_cache_from_github():
     # GitHub se dono Cache File laao - raw.githubusercontent se - agar nahi mili to khali DataFrame
@@ -1967,10 +2028,10 @@ def ind_historical_5x5_with_retry(symbols_with_scrip, interval, start_ms, end_ms
     return result, logs
 
 def download_history_tf_month(token, universe_stocks, scrip_map_dict):
-    # V34 - Download me hi 5 timeframe ki history le lo - mahina-wise, data/history/... me.
-    # Daily: 216 stocks (ATR ke liye sab chahiye). Intraday (5min/15min/1H/4H): pehle 100 stocks - baaki ka jab Top 15 me aayega to live se aa jayega.
-    # Lookback: 5min 7 din (API max), 15min 30 din, 1H 30 din, 4H 60 din, Daily 35 din.
-    # Pehli baar poora lookback, agli baar save_tf_month purani candles se merge karke sirf nayi jodta hai - dobara download nahi hota.
+    # V35 - Download se PEHLE check karo kahan tak saved hai, uske AAGE ka hi mango - purana dobara mat mango
+    # - Pehli baar: poora lookback (500 candles tak) - 5min 7 din, 15min 30 din, 1H 100 din, 4H 400 din, Daily 500 din, Weekly 10 saal
+    # - Agli baar: Aakhri saved + 1 candle se Abhi Tak ka Delta hi mango - pichhla data store rahega, naya uske upar jud jayega (overwrite nahi, update hoga)
+    # - Agar aakhri saved abhi ka hi hai to us timeframe ko chhedo hi mat - pehle se saved hai
     # Returns [(tf, yyyymm, ok, msg)]
     _out = []
     try:
@@ -1978,10 +2039,14 @@ def download_history_tf_month(token, universe_stocks, scrip_map_dict):
             return [("all", "", False, "History: stocks ya scrip khali")]
         _trading_day = get_trading_day()
         _s, _scan_end = get_scan_window(_trading_day)
-        _lookbacks = {"5min": 7, "15min": 30, "1hour": 30, "4hour": 60, "daily": 35}
+        # Pehle check karo - kahan tak saved hai
+        try:
+            _saved, _saved_df = check_saved_history()
+        except:
+            _saved = {}
         for _tf in TF_LIST:
             try:
-                _stocks = list(universe_stocks) if _tf == "daily" else list(universe_stocks)[:100]
+                _stocks = list(universe_stocks) if _tf in ("daily", "weekly") else list(universe_stocks)[:100]
                 _pairs = []
                 for _sname in _stocks:
                     _sid = str(scrip_map_dict.get(str(_sname).upper(), "") or "").strip()
@@ -1989,7 +2054,29 @@ def download_history_tf_month(token, universe_stocks, scrip_map_dict):
                         _pairs.append((str(_sname).upper(), _sid))
                 if not _pairs:
                     continue
-                _start_dt = _scan_end - timedelta(days=_lookbacks[_tf])
+                # Aakhri saved kahan tak hai?
+                _last_saved = (_saved.get(_tf, {}) or {}).get("last")
+                if _last_saved is not None:
+                    try:
+                        _last_saved = pd.to_datetime(_last_saved)
+                    except:
+                        _last_saved = None
+                # Agar aakhri saved abhi se 1 candle se kam pehle ka hai to ye TF pehle se poora hai - dobara mat mango
+                if _last_saved is not None and _scan_end is not None:
+                    try:
+                        if (_scan_end - _last_saved) <= TF_DELTA.get(_tf, timedelta(minutes=5)):
+                            _out.append((_tf, "", True, f"{_tf}: pehle se {_last_saved.strftime('%Y-%m-%d %H:%M')} tak saved hai - dobara manga hi nahi"))
+                            continue
+                    except:
+                        pass
+                    _start_dt = _last_saved + TF_DELTA.get(_tf, timedelta(minutes=5))
+                    _mode = f"Delta - {_last_saved.strftime('%Y-%m-%d %H:%M')} ke baad ka hi manga"
+                else:
+                    _start_dt = _scan_end - timedelta(days=TF_LOOKBACK_DAYS.get(_tf, 30))
+                    _mode = f"Pehli baar - pichhle {TF_LOOKBACK_DAYS.get(_tf, 30)} din ka manga (500 candles tak)"
+                if _start_dt >= _scan_end:
+                    _out.append((_tf, "", True, f"{_tf}: naya kuch nahi - pehle se {_last_saved} tak saved hai"))
+                    continue
                 _res, _logs = ind_historical_5x5_with_retry(_pairs, TF_API[_tf], to_ms(_start_dt), to_ms(_scan_end), token)
                 _by_month = {}
                 for _sym, _r in (_res or {}).items():
@@ -2005,10 +2092,13 @@ def download_history_tf_month(token, universe_stocks, scrip_map_dict):
                         if not _mm or str(_mm) == "nan":
                             continue
                         _by_month.setdefault(str(_mm), []).append(_sub.drop(columns=["MM"]))
+                if not _by_month:
+                    _out.append((_tf, "", True, f"{_tf}: {_mode} - naya candle nahi aaya"))
+                    continue
                 for _mm, _parts in _by_month.items():
                     _merged = pd.concat(_parts, ignore_index=True)
                     _ok, _msg = save_tf_month(_tf, _mm, _merged)
-                    _out.append((_tf, _mm, _ok, _msg))
+                    _out.append((_tf, _mm, _ok, f"{_mode} - {_msg}"))
             except Exception as _e_tf:
                 _out.append((_tf, "", False, f"{_tf}: error - {_e_tf}"))
         return _out
@@ -3451,7 +3541,25 @@ def save_trade(trade):
 def get_all_trades():
     try:
         _ensure_diary_csv()
-        df = pd.read_csv(CSV_FILE)
+        df = pd.read_csv(CSV_FILE) if os.path.exists(CSV_FILE) else pd.DataFrame(columns=DIARY_COLUMNS)
+        # V35 - FIX: Sirf local mat dekho - Reboot pe local udd jata hai, GitHub me save hua trade wahan se wapas aayega
+        # Photo wali dikkat yahi thi: Save to ho gaya tha (GitHub me), par kholne pe sirf local dekha, local khali tha to "Diary khali" dikha
+        try:
+            if GITHUB_TOKEN and GITHUB_REPO:
+                _r = requests.get(f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{GITHUB_CSV_PATH}", timeout=10)
+                if _r.status_code == 200 and len(_r.text.strip()) > 20:
+                    _gh = pd.read_csv(io.StringIO(_r.text))
+                    if _gh is not None and not _gh.empty and len(_gh) > len(df):
+                        for _col in DIARY_COLUMNS:
+                            if _col not in _gh.columns:
+                                _gh[_col] = ""
+                        df = _gh[DIARY_COLUMNS]
+                        try:
+                            df.to_csv(CSV_FILE, index=False)
+                        except:
+                            pass
+        except:
+            pass
         if df.empty:
             return df
         # id se ulta sort - naya pehle
@@ -3460,6 +3568,33 @@ def get_all_trades():
         return df
     except Exception:
         return pd.DataFrame(columns=DIARY_COLUMNS)
+
+def update_trade_exit(trade_id, exit_price, status="EXITED"):
+    # V35 - Exit Edit: Buy save ho gaya, ab exit price yahan se badlo - stock change hua ya galat price dala to bhi yahin se theek hoga
+    # OPEN trade ka status EXITED ho jayega, band trade ka status wahi rahega, sirf exit price + PnL badlega
+    try:
+        _ensure_diary_csv()
+        df = pd.read_csv(CSV_FILE)
+        idx = df[df["id"] == trade_id].index
+        if len(idx) > 0:
+            i = idx[0]
+            df.at[i, "exit_price"] = float(exit_price)
+            try:
+                _entry = float(df.at[i, "entry"]); _qty = float(df.at[i, "qty_total"])
+                df.at[i, "pnl"] = (float(exit_price) - _entry) * _qty
+            except:
+                pass
+            df.at[i, "exit_time"] = datetime.now().strftime("%H:%M:%S")
+            if str(df.at[i, "status"]).upper() == "OPEN":
+                df.at[i, "status"] = status
+            df.to_csv(CSV_FILE, index=False)
+            _push_diary_to_github()
+            st.session_state["_diary_last_msg"] = f"Exit update ho gaya - Exit Rs {exit_price}"
+        return df
+    except Exception as e:
+        st.session_state["_diary_last_msg"] = f"Exit update me error - {e}"
+        return get_all_trades()
+
 
 def update_trade_status(trade_id, status, exit_price, pnl):
     try:
@@ -3556,7 +3691,8 @@ with top_right:
                 st.session_state["master_dl_last_date"] = ist_now().strftime("%Y-%m-%d %H:%M")
         st.rerun()
     if st.session_state.get("_master_dl_msg"):
-        st.caption(st.session_state["_master_dl_msg"])
+        with st.expander("Download ka haal", expanded=False):
+            st.write(st.session_state["_master_dl_msg"])
     if st.session_state.get("master_dl_last_date"):
         st.caption(f"{st.session_state['master_dl_last_date']}")
 
@@ -3597,8 +3733,10 @@ if st.session_state.show_diary:
             st.rerun()
     with col_diary_dl1:
         st.caption("")
+    # V35 - FIX: Download ki lambi linein Diary ke upar mat dikhao - Photo me yahi dikkat thi, trade neeche dab gaye the
     if st.session_state.get("_master_dl_msg"):
-        st.info(st.session_state["_master_dl_msg"])
+        with st.expander("Download ka haal", expanded=False):
+            st.write(st.session_state["_master_dl_msg"])
     if st.session_state.get("master_dl_last_date"):
         st.caption(f"Last Master Download: {st.session_state['master_dl_last_date']}")
     if st.session_state.get("_diary_last_msg"):
@@ -3651,6 +3789,16 @@ GITHUB_REPO = "tumhara-username/tumhara-repo-naam"
                     if b2.button(f"SL Hua - #{row['id']}", key=f"ds{row['id']}"):
                         pnl = (row['sl']-row['entry'])*row['qty_total']
                         update_trade_status(row['id'], "SL HIT", row['sl'], pnl); st.rerun()
+                    # V35 - Exit Edit: Target/SL pe nahi nikle, kisi aur price pe nikle to yahan se dalo - stock change hua to bhi yahin se
+                    _exit_val = st.number_input(f"Exit Price - #{row['id']}", value=float(row['entry']) if pd.notna(row['entry']) else 0.0, key=f"ex{row['id']}")
+                    if st.button(f"Exit Save Karo - #{row['id']}", key=f"exb{row['id']}"):
+                        update_trade_exit(row['id'], _exit_val, "EXITED"); st.rerun()
+                else:
+                    # Band trade ka exit price galat dala ho to yahan se badlo - status wahi rahega, PnL naya ban jayega
+                    _exit_old = float(row['exit_price']) if pd.notna(row['exit_price']) and str(row['exit_price']) not in ("", "nan") else float(row['entry'])
+                    _exit_new = st.number_input(f"Exit Badlo - #{row['id']}", value=_exit_old, key=f"exc{row['id']}")
+                    if st.button(f"Exit Badlo Save - #{row['id']}", key=f"excb{row['id']}"):
+                        update_trade_exit(row['id'], _exit_new, str(row['status'])); st.rerun()
         st.download_button("CSV Download Karo", data=trades_df_all.to_csv(index=False), file_name="all_trades.csv", mime="text/csv")
     if st.button("Diary Band Karo"):
         st.session_state.show_diary = False; st.rerun()
