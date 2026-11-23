@@ -3294,6 +3294,74 @@ def fetch_indices_history():
     except Exception as e:
         return pd.DataFrame()
 
+def load_ai_live():
+    # V37 - AI Worker ne jo Market + News + Crash + Impact likha hai, wo yahan se padhenge - Local file -> GitHub data/ai_live.json
+    # 5 min ka cache - har click pe dobara download nahi hoga
+    try:
+        import streamlit as _st
+        _cached = _st.session_state.get("_ai_live_cache", None)
+        _ct = _st.session_state.get("_ai_live_time", None)
+        if _cached is not None and _ct is not None:
+            try:
+                if (datetime.now() - _ct).total_seconds() < 300:
+                    return _cached
+            except:
+                pass
+    except:
+        pass
+    _data = None
+    try:
+        for _cand in [APP_DIR / MASTER_FOLDER / "ai_live.json", Path.cwd() / MASTER_FOLDER / "ai_live.json", APP_DIR / "ai_live.json"]:
+            try:
+                if _cand.is_file():
+                    import json as _js
+                    _data = _js.loads(_cand.read_text(encoding="utf-8", errors="ignore"))
+                    break
+            except:
+                continue
+    except:
+        pass
+    if _data is None and GITHUB_REPO:
+        try:
+            _r = requests.get(f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{MASTER_FOLDER}/ai_live.json", timeout=10)
+            if _r.status_code == 200 and len(_r.text.strip()) > 20:
+                import json as _js
+                _data = _js.loads(_r.text)
+        except:
+            pass
+    try:
+        import streamlit as _st
+        if _data is not None:
+            _st.session_state["_ai_live_cache"] = _data
+            _st.session_state["_ai_live_time"] = datetime.now()
+    except:
+        pass
+    return _data
+
+
+def load_ai_memory():
+    # V37 - AI ki yaad - pichhli baar aisa hua to kya hua - Local -> GitHub data/ai_memory.json
+    try:
+        for _cand in [APP_DIR / MASTER_FOLDER / "ai_memory.json", Path.cwd() / MASTER_FOLDER / "ai_memory.json"]:
+            try:
+                if _cand.is_file():
+                    import json as _js
+                    return _js.loads(_cand.read_text(encoding="utf-8", errors="ignore"))
+            except:
+                continue
+    except:
+        pass
+    if GITHUB_REPO:
+        try:
+            _r = requests.get(f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{MASTER_FOLDER}/ai_memory.json", timeout=10)
+            if _r.status_code == 200 and len(_r.text.strip()) > 20:
+                import json as _js
+                return _js.loads(_r.text)
+        except:
+            pass
+    return None
+
+
 def fetch_global_news():
     news_rows = []; seen = set()
     for ticker in ["^NSEI", "^NSEBANK", "^BSESN"]:
@@ -3431,54 +3499,9 @@ def is_qualifying_row(row):
     except Exception as e:
         return False, f"Rule check me error - {e}"
 
-def learn_from_past():
-    # V36 - AI jaisa seekhna - Pichhla data use karo, delete mat karo, usse selection improve karo
-    # Diary ke band trade se: kis stock me jeet/haar hui, kis direction me jeet hui - usse agle Scan ka Score badlega
-    # Returns (adjust_dict {STOCK: (adj, reason)}, summary_df, summary_text)
-    _adjust = {}
-    _rows = []
-    _summary = "Diary me band trade nahi hai - seekhne ke liye pehle 2-3 trade Diary me save karo"
-    try:
-        _df = get_all_trades()
-        if _df is not None and not _df.empty and "symbol" in _df.columns and "status" in _df.columns:
-            _closed = _df[_df["status"].astype(str).str.upper().isin(["TARGET HIT", "SL HIT", "EXITED"])]
-            if not _closed.empty:
-                _total = len(_closed)
-                try:
-                    _pnl = pd.to_numeric(_closed["pnl"], errors="coerce").fillna(0)
-                    _wins = int((_pnl > 0).sum())
-                    _win_rate = round(_wins / _total * 100) if _total else 0
-                except:
-                    _wins = 0; _win_rate = 0
-                _summary = f"Diary se seekha: {_total} band trade, {_wins} jeet ({_win_rate}%) - "
-                for _sym, _g in _closed.groupby(_closed["symbol"].astype(str).str.upper()):
-                    try:
-                        _n = len(_g)
-                        if _n < 2:
-                            continue
-                        _p = pd.to_numeric(_g["pnl"], errors="coerce").fillna(0)
-                        _w = int((_p > 0).sum())
-                        _wr = _w / _n * 100
-                        if _wr >= 60:
-                            _adjust[str(_sym).upper()] = (5, f"Diary me {_n} me se {_w} jeet ({_wr:.0f}%) - Score +5")
-                            _rows.append({"Stock": str(_sym).upper(), "Trade": _n, "Jeet": _w, "Win %": round(_wr), "Score Badla": "+5"})
-                        elif _wr <= 40:
-                            _adjust[str(_sym).upper()] = (-10, f"Diary me {_n} me se {_w} jeet ({_wr:.0f}%) - Score -10")
-                            _rows.append({"Stock": str(_sym).upper(), "Trade": _n, "Jeet": _w, "Win %": round(_wr), "Score Badla": "-10"})
-                    except:
-                        continue
-                if _rows:
-                    _summary += f"{len(_rows)} stock ka Score Diary se badla"
-                else:
-                    _summary += "Kisi stock me 2+ trade nahi hai, isliye Score nahi badla - 2 trade ke baad seekhega"
-    except Exception as _e:
-        _summary = f"Seekhne me error - {_e}"
-    return _adjust, pd.DataFrame(_rows), _summary
-
-
 def build_best_effort_call(row, chain_df, expiry, news_bias, learn_adj=0):
     # V36 - BEST EFFORT - Koi stock sab rule pass nahi karta to bhi 1 stock do, khali mat chhodo
-    # Score = Prob x 0.6 + Diary se seekha hua adjustment - taaki pata chale ye pakka setup nahi hai, par Top me sabse behtar yahi hai
+    # V37 - Score = Prob x 0.6 hi - Diary wale +/- se nahi, taaki pata chale ye pakka setup nahi hai, par Top me sabse behtar yahi hai
     # Single Search me isko nahi bulate - sirf Scan ke FINAL CALL me, taaki zabardasti trade na bane
     try:
         stock = str(row.get("Stock", ""))
@@ -3487,7 +3510,7 @@ def build_best_effort_call(row, chain_df, expiry, news_bias, learn_adj=0):
         direction = str(row.get("Direction", ""))
         mtype = str(row.get("Movement Type", ""))
         _ok_q, _why_q = is_qualifying_row(row)
-        _score = int(max(0, min(100, prob * 0.6 + safe_float(learn_adj))))
+        _score = int(max(0, min(100, prob * 0.6)))
         if chain_df is None or chain_df.empty:
             return {"status": "NO_CHAIN", "stock": stock, "ltp": ltp, "prob": prob, "score": _score, "direction": direction, "movement_type": mtype,
                     "reason": f"BEST EFFORT - Sab rule pass nahi hua ({_why_q}) - Score {_score}% - Chain bhi nahi aaya, Token check karo", "expiry": expiry or "",
@@ -4155,6 +4178,47 @@ try:
 except Exception as e:
     pass
 
+# ---------------- V37 - AI LIVE - Market + News + Crash + Impact - AI Worker ne likha, yahan sirf dikhega ----------------
+# Website pe source ka naam nahi likhenge - sirf jaankari dikhegi
+with st.expander("AI Live - Market, News, Crash, Impact", expanded=True):
+    try:
+        _ai = load_ai_live()
+        if not _ai:
+            st.write("AI abhi tak chala nahi hai - thodi der baad phir dekho.")
+        else:
+            _mkt = _ai.get("market", {}) or {}
+            _upd = str(_ai.get("updated_at", ""))
+            st.write(f"Market: {_mkt.get('direction', '')} - Nifty {safe_float(_mkt.get('nifty', 0)):.0f} ({safe_float(_mkt.get('nifty_change_pct', 0)):+.2f}%) | Bank Nifty {safe_float(_mkt.get('bank_nifty', 0)):.0f} ({safe_float(_mkt.get('bank_nifty_change_pct', 0)):+.2f}%) | Sensex {safe_float(_mkt.get('sensex', 0)):.0f} ({safe_float(_mkt.get('sensex_change_pct', 0)):+.2f}%) | VIX {safe_float(_mkt.get('vix', 0)):.1f} | Upar: {_mkt.get('advance', '')} | Neeche: {_mkt.get('decline', '')}")
+            st.write(f"AI kab chala: {_upd}")
+            try:
+                _upd_dt = pd.to_datetime(_upd)
+                _age_min = (datetime.now() - _upd_dt.to_pydatetime().replace(tzinfo=None) if hasattr(_upd_dt, "to_pydatetime") else datetime.now()).total_seconds() / 60 if _upd_dt is not None else 9999
+                if _age_min > 30:
+                    st.write("AI ruka hua lag raha hai - thodi der baad phir dekho.")
+            except:
+                pass
+            _crash = _ai.get("crash_alerts", []) or []
+            if _crash:
+                st.write("Crash / Tez Giravat:")
+                for _c in _crash:
+                    st.write(f"  - {_c}")
+            else:
+                st.write("Koi crash nahi hai.")
+            _news_ai = _ai.get("news", []) or []
+            if _news_ai:
+                _ndf = pd.DataFrame([{"News": str(_n.get("title", ""))[:120], "Type": str(_n.get("type", "")), "Direction": str(_n.get("direction", "")), "Asar": str(_n.get("impact", ""))} for _n in _news_ai])
+                st.dataframe(_ndf, use_container_width=True, hide_index=True)
+            else:
+                st.write("Abhi koi badi khabar nahi hai.")
+            _mem = load_ai_memory() or {}
+            _pats = (_mem.get("patterns", []) or [])[:5]
+            if _pats:
+                st.write("Pichhli baar aisa hua to kya hua:")
+                for _pt in _pats:
+                    st.write(f"  - {str(_pt.get('text', ''))}")
+    except Exception as _e_ai:
+        st.write(f"AI Live me error - {_e_ai}")
+
 # Manual News wala stock - jaise BHEL me 2.5 lakh crore ka deal hua to BHEL bhag sakta hai, wo Yahoo Top 5 me nahi bhi ho to bhi hum usko Step 2 me lenge
 st.markdown("### News")
 manual_input = st.text_input("News Stock", placeholder="BHEL, SUZLON", key="manual_news_input")
@@ -4233,30 +4297,7 @@ if st.button("Scan", use_container_width=True):
         st.session_state.scan_df = df_step1
         st.session_state.step1_debug = debug1
         st.session_state.scan_time = datetime.now().strftime("%H:%M:%S")
-        # V36 - Pichhle Diary se seekh ke Score badlo - delete nahi, seekhna hai - jo stock Diary me haara, uska Score -10, jeeta to +5
-        try:
-            _adj, _learn_df, _learn_txt = learn_from_past()
-            st.session_state["learn_summary"] = _learn_txt
-            st.session_state["learn_df"] = _learn_df
-            if _adj and not df_step1.empty and "Stock" in df_step1.columns and "Probability %" in df_step1.columns:
-                _new_probs = []
-                _seekha = []
-                for _i in range(len(df_step1)):
-                    _stk = str(df_step1.iloc[_i]["Stock"]).upper()
-                    _pr = safe_float(df_step1.iloc[_i]["Probability %"])
-                    if _stk in _adj:
-                        _a, _r = _adj[_stk]
-                        _new_probs.append(max(0, min(100, _pr + _a)))
-                        _seekha.append(_r)
-                    else:
-                        _new_probs.append(_pr)
-                        _seekha.append("")
-                df_step1["Probability %"] = _new_probs
-                df_step1["Seekha"] = _seekha
-                df_step1 = df_step1.sort_values("Probability %", ascending=False).reset_index(drop=True)
-                st.session_state.scan_df = df_step1
-        except Exception as _e_learn:
-            st.session_state["learn_summary"] = f"Seekhne me error - {_e_learn}"
+        # V37 - Diary wale jeet-haar se Score +/- karna BAND - user ne mana kiya, ab AI Worker se seekhna hoga
         selected = []
         if not df_step1.empty:
             _top15 = df_step1.head(15)["Stock"].tolist() if "Stock" in df_step1.columns else []
@@ -4367,11 +4408,7 @@ if st.button("Scan", use_container_width=True):
             _top_call = build_trade_call(_final_row, _final_chain, _final_expiry, _nb)
             # V36 - Koi rule pass nahi karta to bhi 1 stock do - BEST EFFORT - khali mat chhodo, Score ke saath bata do pakka nahi hai
             if _top_call.get("status") == "NO_TRADE":
-                try:
-                    _adj_top = learn_from_past()[0].get(_fstock, (0, ""))[0]
-                except:
-                    _adj_top = 0
-                _top_call = build_best_effort_call(_final_row, _final_chain, _final_expiry, _nb, _adj_top)
+                _top_call = build_best_effort_call(_final_row, _final_chain, _final_expiry, _nb, 0)
             # Session me sirf scalar rakhenge - chain DataFrame dobara chain_map se milegi
             st.session_state["top_call"] = _top_call
             st.session_state["top_call_stock"] = _fstock
@@ -4429,18 +4466,13 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             _fexp2 = _cmap_top2.get(_fstock2, {}).get("expiry", "") if _fstock2 in _cmap_top2 else ""
             _final_call = build_trade_call(_frow, _fchain2, _fexp2, _news_bias_top)
             if _final_call.get("status") == "NO_TRADE":
-                try:
-                    _adj_fc = learn_from_past()[0].get(_fstock2, (0, ""))[0]
-                except:
-                    _adj_fc = 0
-                _final_call = build_best_effort_call(_frow, _fchain2, _fexp2, _news_bias_top, _adj_fc)
+                _final_call = build_best_effort_call(_frow, _fchain2, _fexp2, _news_bias_top, 0)
             st.session_state["top_call"] = _final_call
     except Exception as _e_fc:
         _final_call = {"status": "NO_TRADE", "stock": "", "reason": f"FINAL CALL me error - {_e_fc}", "expiry": ""}
     st.markdown("### Best Stock")
     st.write(f"News: {_news_bias_top}")
-    if st.session_state.get("learn_summary"):
-        st.write(f"Seekha: {st.session_state.get('learn_summary')}")
+    # V37 - Diary wala Seekha hata diya - ab AI Live neeche se aayega
     if _final_call and _final_call.get("status") == "TRADE":
         st.success(f"BUY KARO: {_final_call['stock']} {_final_call['strike']} {_final_call['opt_type']} @ Rs {_final_call['entry']} - Expiry: {_final_call['expiry']} - 1 Lot Cost Rs {_final_call['cost']:.0f} (Lot {_final_call['lot']})")
         st.write(f"**BUY:** Rs {_final_call['entry']} pe BUY karo | **SELL (Target):** Rs {_final_call['target']} pe SELL karo | **STOP LOSS:** Rs {_final_call['sl']} pe nikal jao - SL se neeche mat ruko")
