@@ -1,4 +1,4 @@
-# app.py - V29 - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - History Cache GitHub Se - Docs Pattern scrip-codes=NSE_2885 - Yahoo/NSE Band - FULL DAY MOVEMENT + HISTORICAL DATA - INDstocks Docs se bana hua COMPLETE SCRIPT
+# app.py - V30 - Option Chain Fix + Fast Scan - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - History Cache GitHub Se - Docs Pattern scrip-codes=NSE_2885 - Yahoo/NSE Band - FULL DAY MOVEMENT + HISTORICAL DATA - INDstocks Docs se bana hua COMPLETE SCRIPT
 # ============================================================================================
 # KYA BADLA HAI V15 ME - USER NE SAHI KAHA THA:
 # Pehle hum sirf OPEN-HIGH dekh rahe the. Matlab 9:15-9:30 ka ORB dekh ke bol dete the "Breakout hai".
@@ -83,7 +83,7 @@ try:
 except:
     IST = timezone(timedelta(hours=5, minutes=30))
 
-st.set_page_config(page_title="Scanner V29 - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix", layout="wide")
+st.set_page_config(page_title="Scanner V30 - Option Chain Fix + Fast Scan - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix", layout="wide")
 
 # ---------------- CONFIG ----------------
 CAPITAL = 5000
@@ -359,8 +359,6 @@ def ind_load_master_from_github_file():
     # Agar file GitHub pe nahi mili to (None, msg) - tab KNOWN_SCRIP se kaam chalega, fail nahi hoga.
     # Tum CSV bhej doge to hum bhi isi naam se rakh denge, tum GitHub pe bhi isi naam se upload kar dena.
     # Pehle IND_master_index dhoondo - yahi tumne bola hai
-    # V29 - Bare fname (pd.read_csv("IND_master_index.csv")) CWD pe depend karta tha - kabhi repo root nahi hota to file nahi milti thi.
-    # Ab APP_DIR / fname se seedha bagal wali file padhenge - app.py jis folder me hai, file bhi wahin hai.
     for fname in ["IND_master_index.csv", "IND_Master_Index.csv", "IND_Master_index.csv", "ind_master_index.csv", "IND_Master_Index.CSV"]:
         try:
             df, _m = read_local_csv(fname)
@@ -402,23 +400,18 @@ def ind_get_all_scrips(token):
     # File me 2 tarah ki format ho sakti hai, dono ko handle karo:
     # A) IND_master_index - 3 columns: EXCH, SEGMENT (isme Naam hai), SECURITY_ID - Position se padho
     # B) Equity / FNO Master - 23/26 columns: SYMBOL_NAME, TRADING_SYMBOL, SECURITY_ID - Header se padho
-    # V29 - SABSE PEHLE bagal wali IND_Scrip_Codes.csv - ye chhoti bani-banayi file hai (STOCK + SECURITY_ID + SCRIP_CODE_NSE + EXPIRY_LIST).
-    # Pehle hum 30,000-row wali Master file ko row-by-row loop karke Code nikalte the - wahi sabse zyada time kha raha tha.
-    # Ab chhoti file se vectorized (zip) tarike se Map banayenge - 1 second se bhi kam me.
-    # Session me Download Data wala fresh data ho to wo pehle aayega (upar wale session check me) - yahan local file uske baad hai.
+    # V29 - SABSE PEHLE bagal wali IND_Scrip_Codes.csv - chhoti bani-banayi file (STOCK + SECURITY_ID + SCRIP_CODE_NSE + EXPIRY_LIST).
+    # Pehle 30,000-row wali Master ko row-by-row loop karte the - wahi slow tha. Ab chhoti file se zip se Map - 1 sec se bhi kam.
     try:
         _sc_df, _sc_msg = read_local_csv("IND_Scrip_Codes.csv")
         if _sc_df is not None and not _sc_df.empty and "SECURITY_ID" in _sc_df.columns:
             _out = dict(KNOWN_SCRIP)
-            # Column naam alag-alag ho sakte hain - STOCK ya SYMBOL_NAME
             _sym_col = "STOCK" if "STOCK" in _sc_df.columns else ("SYMBOL_NAME" if "SYMBOL_NAME" in _sc_df.columns else None)
             if _sym_col:
-                # Vectorized - row-by-row loop nahi, zip se seedha dict
                 for _sym, _sid in zip(_sc_df[_sym_col].astype(str), _sc_df["SECURITY_ID"].astype(str)):
                     _sym = _sym.strip().upper(); _sid = _sid.strip()
                     if _sym and _sym != "NAN" and _sid and _sid.lower() != "nan":
                         _out[_sym] = _sid
-                # TRADING_SYMBOL / CUSTOM_SYMBOL bhi ho to wo bhi daal do - bina loop ke, zip se
                 for _col2 in ["TRADING_SYMBOL", "CUSTOM_SYMBOL", "UNDERLYING_SCRIP_NAME"]:
                     if _col2 in _sc_df.columns:
                         for _sym2, _sid2 in zip(_sc_df[_col2].astype(str), _sc_df["SECURITY_ID"].astype(str)):
@@ -685,8 +678,6 @@ def get_expiry_from_master_file(stock_name, token=None):
     # Isse roz-roz Expiry search ki zaroorat khatam - Mahine me 1 baar Master Download karne se sab Expiry mil jayegi.
     # Agar Master File me nahi mili to Fallback Thursday (V19 wala) use karenge - fail nahi karenge.
     # V29 - SABSE PEHLE bagal wali IND_Scrip_Codes.csv ki EXPIRY_LIST - Expiry bhi usi file me jama hai, API se mangne ki zaroorat nahi.
-    # Pehle hum FNO Master (30k rows) me Expiry dhoondhte the, nahi mili to IND API pe expiries mangte the - dono slow.
-    # Ab chhoti file me STOCK ke saamne EXPIRY_LIST likhi hai - "2026-11-26;2026-12-03..." - wahin se le lo.
     try:
         _sc_exp, _sc_exp_msg = read_local_csv("IND_Scrip_Codes.csv")
         if _sc_exp is not None and not _sc_exp.empty and "EXPIRY_LIST" in _sc_exp.columns:
@@ -1104,9 +1095,7 @@ def get_scan_universe_216(token=None):
         _udf = _st.session_state.get("universe_216_df", None)
         if _udf is not None and not _udf.empty and "STOCK" in _udf.columns and len(_udf) >= 100:
             return _udf["STOCK"].astype(str).str.upper().tolist(), _udf, f"Universe GitHub/Session se turant - {len(_udf)} stocks"
-        # 1b) V29 - Bagal wali IND_Universe_216.csv - bani-banayi 216 wali list, dobara Master se banane ki zaroorat hi nahi
-        # Pehle hum har baar Master FNO se DISTINCT UNDERLYING nikal ke universe dobara banate the - wahi slow tha.
-        # Ab bagal wali file se seedha le lo - turant.
+        # 1b) V29 - Bagal wali IND_Universe_216.csv - bani-banayi list, dobara Master se banane ki zaroorat nahi
         try:
             _udf_local, _umsg_local = read_local_csv("IND_Universe_216.csv")
             if _udf_local is not None and not _udf_local.empty and "STOCK" in _udf_local.columns and len(_udf_local) >= 100:
@@ -1162,9 +1151,7 @@ def load_history_cache_from_github():
             return _d, _t, f"History Cache Session se - Daily {len(_d)} rows, Today {len(_t)} candles"
         daily_df = pd.DataFrame()
         today_df = pd.DataFrame()
-        # V29 - PEHLE bagal wali file - Same Folder se turant, koi network nahi.
-        # Pehle hum dono file ke liye seedha raw.githubusercontent pe requests.get karte the - har baar 10 sec timeout tak wait, wahi time kha raha tha.
-        # Ab pehle APP_DIR / filename se padhenge - mili to GitHub Raw pe jayenge hi nahi. Nahi mili tabhi Raw se lenge.
+        # V29 - PEHLE bagal wali file - Same Folder se turant, koi network nahi. Local mili to Raw pe jayenge hi nahi.
         for _fn, _is_daily in [(HISTORY_DAILY_FILE, True), (HISTORY_TODAY_FILE, False)]:
             try:
                 _ldf, _lmsg = read_local_csv(_fn)
@@ -1173,10 +1160,9 @@ def load_history_cache_from_github():
                         daily_df = _ldf
                     else:
                         today_df = _ldf
-                    continue  # Local mil gayi - is file ke liye Raw pe mat jao
+                    continue
             except:
                 pass
-            # Local nahi mili - tabhi GitHub Raw se lo (jaise file dusri jagah se push hui ho, is deploy me abhi aayi na ho)
             try:
                 if GITHUB_TOKEN and GITHUB_REPO:
                     _url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{_fn}"
@@ -1639,67 +1625,161 @@ def ind_get_scrip(symbol, token, scrip_map=None):
         pass
     return "", f"CSV me {symbol} nahi mila"
 
+def _parse_option_chain_data(data):
+    # V30 - Chain ka parse ek jagah - IND kabhi strikes ko dict deta hai, kabhi list, kabhi keys alag hoti hain - sab handle karo
+    # Dict form: strikes = {"2500": {"ce": {...}, "pe": {...}}, ...}
+    # List form: strikes = [{"strike": 2500, "ce": {...}, "pe": {...}}, ...] ya [{"strike_price": 2500, "call": {...}, "put": {...}}, ...]
+    # Har leg me premium ke naam alag ho sakte hain - last_price / ltp / premium / close - pehla jo mile wahi lo
+    try:
+        if not isinstance(data, dict):
+            return pd.DataFrame(), 0
+        strikes = data.get("strikes", None)
+        if strikes is None:
+            strikes = data.get("options", None)
+        if strikes is None:
+            return pd.DataFrame(), 0
+        # List ko dict jaisa banao
+        items = []
+        if isinstance(strikes, dict):
+            for _k, _v in strikes.items():
+                items.append((_k, _v))
+        elif isinstance(strikes, list):
+            for _el in strikes:
+                if not isinstance(_el, dict):
+                    continue
+                _k = _el.get("strike", _el.get("strike_price", _el.get("strikePrice", "")))
+                items.append((_k, _el))
+        else:
+            return pd.DataFrame(), 0
+        def _leg_val(leg, keys, default=0):
+            try:
+                if not isinstance(leg, dict):
+                    return default
+                for _k in keys:
+                    if _k in leg and leg[_k] not in (None, "", "nan"):
+                        return leg[_k]
+                return default
+            except:
+                return default
+        rows = []
+        for _strike_key, _legs in items:
+            try:
+                try:
+                    _strike = safe_int(float(str(_strike_key).strip()))
+                except:
+                    # List wale me strike key ke bajaye legs me strike ho sakta hai
+                    _strike = safe_int(float(str(_legs.get("strike", _legs.get("strike_price", 0))))) if isinstance(_legs, dict) else 0
+                if _strike <= 0:
+                    continue
+                if not isinstance(_legs, dict):
+                    continue
+                # CE / PE ke naam - ce/pe, CE/PE, call/put
+                _ce = _legs.get("ce", _legs.get("CE", _legs.get("call", _legs.get("Call", {}))))
+                _pe = _legs.get("pe", _legs.get("PE", _legs.get("put", _legs.get("Put", {}))))
+                if not isinstance(_ce, dict):
+                    _ce = {}
+                if not isinstance(_pe, dict):
+                    _pe = {}
+                rows.append({
+                    "Strike": _strike,
+                    "CE Premium": safe_float(_leg_val(_ce, ["last_price", "ltp", "premium", "last_traded_price", "close", "price"])),
+                    "PE Premium": safe_float(_leg_val(_pe, ["last_price", "ltp", "premium", "last_traded_price", "close", "price"])),
+                    "CE OI": safe_int(_leg_val(_ce, ["oi", "open_interest", "openInterest"])),
+                    "PE OI": safe_int(_leg_val(_pe, ["oi", "open_interest", "openInterest"])),
+                    "CE IV": safe_float(_leg_val(_ce, ["iv", "implied_volatility", "impliedVolatility"])),
+                    "PE IV": safe_float(_leg_val(_pe, ["iv", "implied_volatility", "impliedVolatility"])),
+                    "CE Delta": safe_float(_leg_val((_ce.get("greeks", {}) or {}), ["delta"]) if isinstance(_ce.get("greeks", {}), dict) else safe_float(_leg_val(_ce, ["delta"]))),
+                    "PE Delta": safe_float(_leg_val((_pe.get("greeks", {}) or {}), ["delta"]) if isinstance(_pe.get("greeks", {}), dict) else safe_float(_leg_val(_pe, ["delta"]))),
+                    "CE Bid": safe_float(_leg_val(_ce, ["top_bid_price", "bid", "best_bid", "bid_price"])),
+                    "CE Ask": safe_float(_leg_val(_ce, ["top_ask_price", "ask", "best_ask", "ask_price"])),
+                    "PE Bid": safe_float(_leg_val(_pe, ["top_bid_price", "bid", "best_bid", "bid_price"])),
+                    "PE Ask": safe_float(_leg_val(_pe, ["top_ask_price", "ask", "best_ask", "ask_price"])),
+                })
+            except:
+                continue
+        if not rows:
+            return pd.DataFrame(), 0
+        _df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+        return _df, len(_df)
+    except Exception:
+        return pd.DataFrame(), 0
+
 def ind_get_option_chain(symbol, token, scrip_map=None):
-    # Docs Option Chain: GET /market/option-chain?exchange=NSE&segment=EQUITY&underlying-scrip=2885&expiry=YYYY-MM-DD&strike_count=25
+    # V30 - PHOTO WALA FIX - Pehle wala code pehli hi koshish me haar maan jata tha:
+    #   params = {exchange NSE, segment EQUITY, expiry 2026-11-26} -> API ne 200 + {"strikes": []} diya -> humne turant "strikes khali" bol ke return kar diya.
+    # Asli wajah Token nahi tha - Token sahi tha, isliye underlying_ltp 1984.9 aa gaya tha. Wajah ye thi:
+    #   1) Segment galat ho sakta hai - Equity Options ke liye DERIVATIVE chahiye hota hai, EQUITY pe khali aata hai
+    #   2) Expiry galat ho sakti hai - Master wali Expiry monthly ho, Chain ko weekly chahiye ho, ya us Expiry pe us stock ki Chain hi na ho
+    #   3) strike_count galat ho sakta hai - 25 pe khali, 10 pe aa jaye
+    # Isliye ab ek koshish me haar nahi manenge - Expiry (3 tak) x Segment (DERIVATIVE / EQUITY / bina segment) x strike_count (25 / 10 / bina) - sab try karenge.
+    # Jisme pehle strikes mil jayenge, wahin ruk jayenge. Sab fail ho to tabhi khali bolenge, poora try-list ke saath - taaki pata chale kya-kya try kiya.
     if not token or len(str(token).strip()) < 10:
         return pd.DataFrame(), "Token nahi diya", "", "", ""
     expiries, err_exp = ind_get_expiries(symbol, token)
     if not expiries:
-        return pd.DataFrame(), f"Expiry nahi mili - {err_exp}", "", "", ""
-    expiry_yyyy_mm_dd = str(expiries[0])
+        expiries = [get_nearest_thursday_fallback()]
+        err_exp = f"Expiry list khali thi, Fallback Thursday {expiries[0]} try kar rahe hain - {err_exp}"
+    # Expiry list - pehli 3 hi try karenge (zyada try karne se slow hoga) + Fallback Thursday bhi jod do agar list me nahi hai
+    _try_expiries = []
+    for _e in list(expiries)[:3]:
+        _es = str(_e).strip()
+        if _es and _es not in _try_expiries:
+            _try_expiries.append(_es)
+    try:
+        _fb = get_nearest_thursday_fallback()
+        if _fb not in _try_expiries:
+            _try_expiries.append(_fb)
+    except:
+        pass
     scrip, _src = ind_get_scrip(symbol, token, scrip_map)
     if not scrip:
-        return pd.DataFrame(), f"Scrip nahi mila - {_src}", expiry_yyyy_mm_dd, "", ""
-    try:
-        # V23 - Option Chain sirf INDmoney se mangenge, NSE se nahi.
-        # Pehle hum NSE ka Option Chain bhi try karte the, isliye photo me "NSE nahi de paya" wala fail aata tha.
-        # Ab NSE ka Option Chain try hi nahi karenge - sirf INDmoney ka.
-        # INDmoney ke Docs ke hisab se: GET /market/option-chain?exchange=NSE&segment=EQUITY&underlying-scrip=2885&expiry=YYYY-MM-DD&strike_count=25
-        # Security ID GitHub CSV File se aaya hai (jaise RELIANCE = 2885), naam se search nahi kiya.
-        # Pehle Docs wala poora request bhejo (exchange + segment + Security ID), agar wo fail ho to sirf Security ID wala bhi try karo.
-        params = {"exchange": "NSE", "segment": "EQUITY", "underlying-scrip": scrip, "expiry": expiry_yyyy_mm_dd, "strike_count": 25}
-        r = requests.get(f"{IND_BASE}/market/option-chain", headers=ind_headers(token), params=params, timeout=15)
-        if r.status_code != 200:
-            # Fallback - sirf Security ID se bhi try karo
-            params2 = {"underlying-scrip": scrip, "expiry": expiry_yyyy_mm_dd, "strike_count": 25}
-            r = requests.get(f"{IND_BASE}/market/option-chain", headers=ind_headers(token), params=params2, timeout=15)
-        if r.status_code != 200:
-            return pd.DataFrame(), f"IND Fail - Status {r.status_code} - {r.text[:500]}", expiry_yyyy_mm_dd, scrip, ""
-        j = r.json()
-        data = j.get("data", {})
-        strikes_dict = data.get("strikes", {})
-        underlying_ltp = safe_float(data.get("underlying_ltp", 0))
-        if not strikes_dict:
-            return pd.DataFrame(), f"IND se strikes khali aaye - {str(j)[:400]}", expiry_yyyy_mm_dd, scrip, str(underlying_ltp)
-        rows = []
-        for strike_str, legs in strikes_dict.items():
+        return pd.DataFrame(), f"Scrip nahi mila - {_src}", str(_try_expiries[0]) if _try_expiries else "", "", ""
+    # Segment / strike_count ke combos - DERIVATIVE pehle (Equity Options ke liye yahi sahi hota hai), phir EQUITY, phir bina segment
+    _combos = [
+        ({"exchange": "NSE", "segment": "DERIVATIVE"}, "DERIVATIVE", 25),
+        ({"exchange": "NSE", "segment": "EQUITY"}, "EQUITY", 25),
+        ({}, "BINA-SEGMENT", 25),
+        ({"exchange": "NSE", "segment": "DERIVATIVE"}, "DERIVATIVE", 10),
+        ({"exchange": "NSE", "segment": "DERIVATIVE"}, "DERIVATIVE-BINA-COUNT", None),
+    ]
+    _tried = []
+    _last_ltp = ""
+    _last_raw = ""
+    for _expiry in _try_expiries:
+        for _base_params, _seg_name, _scount in _combos:
             try:
-                strike = safe_int(float(strike_str))
-                ce = legs.get("ce", {}) if isinstance(legs, dict) else {}
-                pe = legs.get("pe", {}) if isinstance(legs, dict) else {}
-                rows.append({
-                    "Strike": strike,
-                    "CE Premium": safe_float(ce.get("last_price", 0)),
-                    "PE Premium": safe_float(pe.get("last_price", 0)),
-                    "CE OI": safe_int(ce.get("oi", 0)),
-                    "PE OI": safe_int(pe.get("oi", 0)),
-                    "CE IV": safe_float(ce.get("iv", 0)),
-                    "PE IV": safe_float(pe.get("iv", 0)),
-                    "CE Delta": safe_float((ce.get("greeks", {}) or {}).get("delta", 0)),
-                    "PE Delta": safe_float((pe.get("greeks", {}) or {}).get("delta", 0)),
-                    "CE Bid": safe_float(ce.get("top_bid_price", 0)),
-                    "CE Ask": safe_float(ce.get("top_ask_price", 0)),
-                    "PE Bid": safe_float(pe.get("top_bid_price", 0)),
-                    "PE Ask": safe_float(pe.get("top_ask_price", 0)),
-                })
-            except:
+                _params = dict(_base_params)
+                _params["underlying-scrip"] = scrip
+                _params["expiry"] = _expiry
+                if _scount is not None:
+                    _params["strike_count"] = _scount
+                _tried.append(f"{_expiry} + {_seg_name} + count={_scount}")
+                r = requests.get(f"{IND_BASE}/market/option-chain", headers=ind_headers(token), params=_params, timeout=15)
+                if r.status_code != 200:
+                    _last_raw = f"Status {r.status_code} - {r.text[:200]}"
+                    continue
+                try:
+                    j = r.json()
+                except:
+                    _last_raw = f"JSON parse nahi hua - {r.text[:200]}"
+                    continue
+                data = j.get("data", {}) if isinstance(j, dict) else {}
+                if not isinstance(data, dict):
+                    data = {}
+                _last_ltp = str(safe_float(data.get("underlying_ltp", 0))) if data.get("underlying_ltp") is not None else _last_ltp
+                _last_raw = str(j)[:400]
+                _df_chain, _n = _parse_option_chain_data(data)
+                if _df_chain is not None and not _df_chain.empty and _n > 0:
+                    # Mil gayi - isi Expiry + Segment pe ruk jao, aage try mat karo (fast ke liye)
+                    return _df_chain, f"IND SE AAYA - {_n} strikes - Expiry {_expiry} - Segment {_seg_name} - Scrip {scrip} - LTP {_last_ltp}", _expiry, scrip, _last_ltp
+                # Strikes khali aaye - is combo pe haar mat mano, agle combo / agle Expiry pe jao (yehi photo wala fix hai)
                 continue
-        df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
-        if df.empty:
-            return pd.DataFrame(), "Parse ke baad khali", expiry_yyyy_mm_dd, scrip, str(underlying_ltp)
-        return df, f"IND SE AAYA - {len(df)} strikes", expiry_yyyy_mm_dd, scrip, str(underlying_ltp)
-    except Exception as e:
-        return pd.DataFrame(), f"Option Chain Error - {e}", expiry_yyyy_mm_dd, scrip, ""
+            except Exception as _e_combo:
+                _last_raw = f"Combo error - {_e_combo}"
+                continue
+    # Sab try kar liya, kahin se strikes nahi aaye
+    _try_txt = " | ".join(_tried)
+    return pd.DataFrame(), f"IND se strikes khali aaye - Sab try kiya: {_try_txt} - Scrip {scrip} - LTP {_last_ltp} - Aakhri jawab: {_last_raw[:300]} - Token sahi hai (LTP aa gaya), Expiry / Segment ka combo nahi mila. Agli Expiry ya thodi der baad dobara try karo.", str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
 
 # ---------------- HISTORICAL DATA - INDstocks - TUMHARE PHOTO WALA PAGE ----------------
 def ind_get_historical_batch(scrip_codes, interval, start_ms, end_ms, token):
@@ -2990,7 +3070,7 @@ init_db()
 
 # ---------------- LOGIN ----------------
 if not st.session_state.authenticated:
-    st.title("Scanner V29 - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix")
+    st.title("Scanner V30 - Option Chain Fix + Fast Scan - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix")
     st.info("IND Token 24 ghante me expire hota hai. Roz subah naya Token banao: indstocks.com -> Login -> /app/api-trading/access-tokens -> Claim Your API Access -> Generate -> Copy karke yahan daalo.")
     st.write("V15 me Scan IND Historical Data se hota hai - 5minute candles se poora din dekha jata hai, sirf Open-High nahi.")
     # PIN HATA DIYA HAI - Ab sirf IND ka Secret Code hi kaafi hai. 4 ank ka Code ab kabhi nahi mangega.
@@ -3021,7 +3101,7 @@ if not st.session_state.authenticated:
 # ---------------- TOP BAR ----------------
 top_left, top_right = st.columns([4, 1])
 with top_left:
-    st.title("Scanner V29 - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY | Rs 5,000 | PIN Hataya | Diary Fix | Kisi bhi Time Scan")
+    st.title("Scanner V30 - Option Chain Fix + Fast Scan - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY | Rs 5,000 | PIN Hataya | Diary Fix | Kisi bhi Time Scan")
 with top_right:
     st.write("")
     if st.button("Trading Diary", use_container_width=True):
@@ -3506,14 +3586,33 @@ if st.button("SCAN NOW - SIRF IND SE - 216 Stocks - NSE_ + Code Se", use_contain
             # Selected ka Candle + Option Chain - ind_fill + option-chain, dono IND se
             step3_results = ind_fill_for_selected(selected, token, scrip_map)
             st.session_state.step3_results = step3_results
-            # Option Chain har Selected ke liye
+            # V30 - FAST SCAN - Option Chain SIRF FINAL CALL wale 1 stock ke liye, 20 stock ke liye nahi.
+            # Pehle hum selected (Top 15 + Prob>=50 + Manual = 20 tak) sab ki Chain mangte the - 20 Chain x har Chain pe retries = SCAN 2-3 min slow ho jata tha.
+            # Ab sirf 1 Chain mangenge - jo stock FINAL CALL me aayega (Rule se chuna gaya Top 1). Baaki stock ki Chain jab zaroorat hogi tab Section 6 / FINAL CALL ke button se 1-1 karke mang lenge.
+            # Isse SCAN ka Chain wala time 20x se 1x ho jayega - SCAN poora fast ho jayega.
             _chain_map = {}
-            for _sym in selected:
-                try:
-                    _ch, _chmsg, _ex, _sc, _lt = ind_get_option_chain(_sym, token, scrip_map)
-                    _chain_map[_sym] = {"chain": _ch, "msg": _chmsg, "expiry": _ex}
-                except Exception as e:
-                    _chain_map[_sym] = {"chain": pd.DataFrame(), "msg": f"Error {e}", "expiry": ""}
+            try:
+                _final_stock_scan = ""
+                # Qualifying wala stock dhoondo - wahi FINAL CALL banega - Prob>=50 + Movement HAAN + Fake/Sideways/Choppy nahi
+                for _i_q in range(len(df_step1)):
+                    _r_q = df_step1.iloc[_i_q]
+                    try:
+                        _ok_q2, _why_q2 = is_qualifying_row(_r_q)
+                    except:
+                        _ok_q2 = False
+                    if _ok_q2:
+                        _final_stock_scan = str(_r_q.get("Stock", ""))
+                        break
+                if not _final_stock_scan and not df_step1.empty:
+                    _final_stock_scan = str(df_step1.iloc[0].get("Stock", ""))
+                if _final_stock_scan:
+                    try:
+                        _ch, _chmsg, _ex, _sc, _lt = ind_get_option_chain(_final_stock_scan, token, scrip_map)
+                        _chain_map[_final_stock_scan] = {"chain": _ch, "msg": _chmsg, "expiry": _ex}
+                    except Exception as e:
+                        _chain_map[_final_stock_scan] = {"chain": pd.DataFrame(), "msg": f"Error {e}", "expiry": ""}
+            except Exception as _e_chain1:
+                _chain_map = {}
             st.session_state.chain_map = _chain_map
         else:
             st.session_state.step3_results = {}
