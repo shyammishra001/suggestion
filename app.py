@@ -4705,7 +4705,10 @@ if st.session_state.get("single_result"):
                 _s_sugg = {"date": datetime.now().strftime("%Y-%m-%d"), "time": datetime.now().strftime("%H:%M:%S"), "symbol": _s_call['stock'], "strike": _s_call['strike'], "opt_type": _s_call['opt_type'], "entry": float(_s_call['entry']), "sl": float(_s_call['sl']), "target": float(_s_call['target']), "qty_lots": 1, "qty_total": int(_s_call['lot']), "capital_used": float(_s_call['cost']), "risk": float(_s_call['max_loss']), "status": "OPEN", "reason": f"Single Search - Prob {_s_call['prob']:.0f} - {_s_call['movement_type']}", "conditions": _s_call.get('rule_line','')}
                 if st.button("Telegram", use_container_width=True, key="single_call_notify"):
                     _ok_s = send_strike(_s_call['stock'], _s_call['strike'], _s_call['opt_type'], _s_call['entry'], _s_call['sl'], _s_call['target'], _s_call['cost'], _s_call['lot'], _s_call['expiry'], str(_s_call['movement_type']))
-                    st.success("Chala gaya ✅") if _ok_s else st.error("Nahi gaya ❌")
+                    if _ok_s:
+                        st.success("Chala gaya ✅")
+                    else:
+                        st.error("Nahi gaya ❌")
                 if st.button(f"{_stk} ko Diary me Save Karo", use_container_width=True, key="single_call_diary"):
                     save_trade(_s_sugg); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
             else:
@@ -5083,7 +5086,10 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         with _c1:
             if st.button("Telegram", use_container_width=True, key="final_call_notify"):
                 _ok_fc = send_strike(_final_call['stock'], _final_call['strike'], _final_call['opt_type'], _final_call['entry'], _final_call['sl'], _final_call['target'], _final_call['cost'], _final_call['lot'], _final_call['expiry'], str(_final_call['movement_type']))
-                st.success("Chala gaya ✅") if _ok_fc else st.error("Nahi gaya ❌")
+                if _ok_fc:
+                    st.success("Chala gaya ✅")
+                else:
+                    st.error("Nahi gaya ❌")
         with _c2:
             if st.button("Diary", use_container_width=True, key="final_call_diary"):
                 save_trade(_fc_sugg); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
@@ -5102,7 +5108,10 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         with _c1b:
             if st.button("Telegram", use_container_width=True, key="best_effort_notify"):
                 _ok_be = send_strike(_final_call['stock'], _final_call['strike'], _final_call['opt_type'], _final_call['entry'], _final_call['sl'], _final_call['target'], _final_call['cost'], _final_call['lot'], _final_call['expiry'], str(_final_call['movement_type']))
-                st.success("Chala gaya ✅") if _ok_be else st.error("Nahi gaya ❌")
+                if _ok_be:
+                    st.success("Chala gaya ✅")
+                else:
+                    st.error("Nahi gaya ❌")
         with _c2b:
             if st.button("Diary", use_container_width=True, key="best_effort_diary"):
                 save_trade(_fc_sugg2); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
@@ -5126,14 +5135,20 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             st.rerun()
         if st.button("Telegram - Top 5", use_container_width=True, key="nochain_telegram"):
             _ok_nc = send_top5(df_scan.head(5), "")
-            st.success("Chala gaya ✅") if _ok_nc else st.error("Nahi gaya ❌")
+            if _ok_nc:
+                st.success("Chala gaya ✅")
+            else:
+                st.error("Nahi gaya ❌")
     elif _final_call and _final_call.get("status") == "NO_FIT":
         st.warning(f"Rule pass hai - {_final_call.get('stock','')} - Prob {_final_call.get('prob',0):.0f}/100 - par Rs 5000 wala strike nahi mila")
         st.write(f"Wajah: {_final_call.get('reason','')}")
         st.write(f"Movement: {_final_call.get('movement_type','')} - {_final_call.get('movement_detail','')}")
         if st.button("Telegram - Top 5", use_container_width=True, key="nofit_telegram"):
             _ok_nf = send_top5(df_scan.head(5), "")
-            st.success("Chala gaya ✅") if _ok_nf else st.error("Nahi gaya ❌")
+            if _ok_nf:
+                st.success("Chala gaya ✅")
+            else:
+                st.error("Nahi gaya ❌")
     else:
         _nt_stock = _final_call.get('stock','') if _final_call else ""
         _nt_prob = _final_call.get('prob',0) if _final_call else 0
@@ -5144,7 +5159,10 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         st.write("Top 5 neeche dekh lo - koi 50+ wala ho to usko Single Search me alag se check karo, par jab tak Movement suru nahi hota, entry mat lo.")
         if st.button("Telegram - Top 5", use_container_width=True, key="notrade_telegram"):
             _ok_nt = send_top5(df_scan.head(5), "")
-            st.success("Chala gaya ✅") if _ok_nt else st.error("Nahi gaya ❌")
+            if _ok_nt:
+                st.success("Chala gaya ✅")
+            else:
+                st.error("Nahi gaya ❌")
 
     # 3-STEP DEBUG - Har step me kitne aaye, kyu fail hua, sab dikhao - chhupao mat
     _dbg1 = st.session_state.get("step1_debug", {})
@@ -5386,4 +5404,7 @@ else:
             st.write(f"Saved se bhi nahi mila: {_dbg_e.get('fallback_msg')}")
         if st.button("Telegram", use_container_width=True, key="empty_telegram"):
             _ok_t = send_telegram("Scan khali aaya - koi stock nahi mila. Token check karke dobara Scan dabao.")
-            st.success("Chala gaya ✅") if _ok_t else st.error("Nahi gaya ❌")
+            if _ok_t:
+                st.success("Chala gaya ✅")
+            else:
+                st.error("Nahi gaya ❌")
