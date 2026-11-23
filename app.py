@@ -1,4 +1,4 @@
-# app.py - V43 - Scanner
+# app.py - V44 - Scanner
 # ============================================================================================
 import streamlit as st
 import pandas as pd
@@ -53,7 +53,7 @@ except:
 APP_DIR = Path(__file__).resolve().parent  # app.py jis folder me hai, wahi folder - bagal wali file yahin hai
 MASTER_FOLDER = "data"  # V33 - GitHub me sab master data ek hi folder me - bahar root me nahi. Diary alag hai, wo trades_diary me hi rahegi.
 
-APP_VERSION = 43  # V43 - Chain ki asli wajah + Fill datetime fix + AI branch fallback  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
+APP_VERSION = 44  # V43 - Chain ki asli wajah + Fill datetime fix + AI branch fallback  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
 def data_freshness_line():
     # Data taaza hai ya nahi - bas yehi dikhayenge, kahan se aaya ye nahi.
     # Taaza = Aaj ka Scan isi session me ho gaya, ya Universe file aaj ki hai. Nahi to - Download Data dabao.
@@ -574,7 +574,7 @@ def _push_master_to_github(filename, csv_bytes_or_text):
     # Diary ka _push_diary_to_github() sirf Diary ke liye tha, ye Master ke liye hai - same tareeka.
     try:
         if not GITHUB_TOKEN or not GITHUB_REPO:
-            return False, "GitHub Token Secrets me nahi hai - isliye GitHub me auto-save nahi hua. File ko neeche wale Download se le ke GitHub pe haath se daal do."
+            return False, "GitHub Secrets me nahi hai - isliye GitHub me auto-save nahi hua. File ko neeche wale Download se le ke GitHub pe haath se daal do."
         if isinstance(csv_bytes_or_text, bytes):
             csv_text = csv_bytes_or_text.decode("utf-8", errors="ignore")
         else:
@@ -607,7 +607,7 @@ def download_monthly_master_all(token):
     # Steps: 1) 3 File IND se download (fno + equity + index) -> GitHub pe save, 2) Unse Scrip-Code Lookup banao -> GitHub pe IND_Scrip_Codes.csv naam se save, 3) Expiry list bhi usi Lookup me daal do.
     results = []
     if not token or len(str(token).strip()) < 10:
-        return [], "Pehle IND Token se Login karo - bina Token ke Master Download nahi hoga"
+        return [], "Pehle Login karo - bina Login ke Master Download nahi hoga"
     dfs = {}
     for source, filename in [("fno", "IND_Master_FNO.csv"), ("equity", "IND_Master_Equity.csv"), ("index", "IND_master_index.csv")]:
         try:
@@ -1039,7 +1039,7 @@ def ind_quotes_full_docs_pattern(scrip_codes_list, token):
     # Returns (dict { 'NSE_2885': {...} }, msg)
     # Bilkul Docs jaisa - headers = {'Authorization': token}, params = {'scrip-codes': 'NSE_2885,NSE_11536'}
     if not token or len(str(token).strip()) < 10:
-        return {}, "Token nahi diya - INDstocks se naya Token banao (24 ghante me expire hota hai)"
+        return {}, "Login nahi hua - dobara Login karo"
     if not scrip_codes_list:
         return {}, "Koi scrip-code hi nahi diya"
     access_token = str(token).strip()
@@ -2349,23 +2349,26 @@ def _parse_option_chain_data(data):
         return pd.DataFrame(), 0
 
 def ind_get_option_chain(symbol, token, scrip_map=None):
-    # V30 - PHOTO WALA FIX - Pehle wala code pehli hi koshish me haar maan jata tha:
-    #   params = {exchange NSE, segment EQUITY, expiry 2026-11-26} -> API ne 200 + {"strikes": []} diya -> humne turant "strikes khali" bol ke return kar diya.
-    # Asli wajah Token nahi tha - Token sahi tha, isliye underlying_ltp 1984.9 aa gaya tha. Wajah ye thi:
-    #   1) Segment galat ho sakta hai - Equity Options ke liye DERIVATIVE chahiye hota hai, EQUITY pe khali aata hai
-    #   2) Expiry galat ho sakti hai - Master wali Expiry monthly ho, Chain ko weekly chahiye ho, ya us Expiry pe us stock ki Chain hi na ho
-    #   3) strike_count galat ho sakta hai - 25 pe khali, 10 pe aa jaye
-    # Isliye ab ek koshish me haar nahi manenge - Expiry (3 tak) x Segment (DERIVATIVE / EQUITY / bina segment) x strike_count (25 / 10 / bina) - sab try karenge.
-    # Jisme pehle strikes mil jayenge, wahin ruk jayenge. Sab fail ho to tabhi khali bolenge, poora try-list ke saath - taaki pata chale kya-kya try kiya.
+    # V44 - DOCS WALA TARIKA, BILKUL JAISA DOCS ME LIKHA HAI (api-docs.indstocks.com/utility/ - Option Chain):
+    #   GET https://api.indstocks.com/market/option-chain
+    #   ?exchange=NSE&segment=EQUITY&underlying-scrip=2885&expiry=2026-08-25&strike_count=5
+    #   Header: Authorization: <token>   (Bearer NAHI)
+    # Docs ke 3 niyam:
+    #   1) segment sirf INDEX / EQUITY hota hai - DERIVATIVE is endpoint pe hota hi nahi.
+    #   2) underlying-scrip = EQUITY (cash) wala SECURITY_ID - FNO contract ka ID nahi.
+    #   3) expiry = YYYY-MM-DD, strike_count = ATM ke har taraf kitni strikes (default 10).
+    # V43 ki galti: EQUITY sirf count=25 ke saath try hota tha. Agar 25 reject hua to ek bhi
+    # poora-sahi combo kabhi bheja hi nahi gaya - isliye APLAPOLLO, TATASTEEL sab fail.
+    # Ab pehle docs wala combo (EQUITY + 10) jayega, phir EQUITY + 5, phir bina count, phir BSE.
+    # DERIVATIVE / bina-segment / 25 - ye teeno ab kabhi nahi bhejenge, kyunki docs me ye hai hi nahi.
     if not token or len(str(token).strip()) < 10:
-        return pd.DataFrame(), "Token nahi diya", "", "", ""
+        return pd.DataFrame(), "Login nahi hua", "", "", ""
     expiries, err_exp = ind_get_expiries(symbol, token)
     if not expiries:
         expiries = [get_nearest_thursday_fallback()]
         err_exp = f"Expiry list khali thi, Fallback Thursday {expiries[0]} try kar rahe hain - {err_exp}"
-    # Expiry list - pehli 3 hi try karenge (zyada try karne se slow hoga) + Fallback Thursday bhi jod do agar list me nahi hai
     _try_expiries = []
-    for _e in list(expiries)[:3]:
+    for _e in list(expiries)[:2]:
         _es = str(_e).strip()
         if _es and _es not in _try_expiries:
             _try_expiries.append(_es)
@@ -2378,52 +2381,64 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     scrip, _src = ind_get_scrip(symbol, token, scrip_map)
     if not scrip:
         return pd.DataFrame(), f"Scrip nahi mila - {_src}", str(_try_expiries[0]) if _try_expiries else "", "", ""
-    # Segment / strike_count ke combos - DERIVATIVE pehle (Equity Options ke liye yahi sahi hota hai), phir EQUITY, phir bina segment
+    _sym_u = str(symbol).upper()
+    _is_index = any(_k in _sym_u for _k in ["NIFTY", "SENSEX", "BANKEX", "FINNIFTY", "MIDCAP"]) or _sym_u in ["NIFTY 50", "NIFTY BANK", "BANK NIFTY"]
+    _seg = "INDEX" if _is_index else "EQUITY"
+    # Sirf docs wale combos - pehla wala hi docs ka example hai
     _combos = [
-        ({"exchange": "NSE", "segment": "DERIVATIVE"}, "DERIVATIVE", 25),
-        ({"exchange": "NSE", "segment": "EQUITY"}, "EQUITY", 25),
-        ({}, "BINA-SEGMENT", 25),
-        ({"exchange": "NSE", "segment": "DERIVATIVE"}, "DERIVATIVE", 10),
-        ({"exchange": "NSE", "segment": "DERIVATIVE"}, "DERIVATIVE-BINA-COUNT", None),
+        ({"exchange": "NSE", "segment": _seg}, f"NSE + {_seg} + count=10", 10),
+        ({"exchange": "NSE", "segment": _seg}, f"NSE + {_seg} + count=5", 5),
+        ({"exchange": "NSE", "segment": _seg}, f"NSE + {_seg} + bina count", None),
+        ({"exchange": "BSE", "segment": _seg}, f"BSE + {_seg} + count=10", 10),
     ]
     _tried = []
     _last_ltp = ""
     _last_raw = ""
+    _last_api_msg = ""
     for _expiry in _try_expiries:
-        for _base_params, _seg_name, _scount in _combos:
+        for _base_params, _combo_name, _scount in _combos:
             try:
                 _params = dict(_base_params)
                 _params["underlying-scrip"] = scrip
                 _params["expiry"] = _expiry
                 if _scount is not None:
                     _params["strike_count"] = _scount
-                _tried.append(f"{_expiry} + {_seg_name} + count={_scount}")
+                _tried.append(f"{_expiry} + {_combo_name}")
                 r = requests.get(f"{IND_BASE}/market/option-chain", headers=ind_headers(token), params=_params, timeout=15)
                 if r.status_code != 200:
-                    _last_raw = f"Status {r.status_code} - {r.text[:200]}"
+                    _last_raw = f"Status {r.status_code} - {r.text[:300]}"
+                    try:
+                        _jj = r.json()
+                        if isinstance(_jj, dict):
+                            _last_api_msg = str(_jj.get("debug_info") or _jj.get("message") or _jj.get("error") or "")
+                    except:
+                        pass
                     continue
                 try:
                     j = r.json()
                 except:
-                    _last_raw = f"JSON parse nahi hua - {r.text[:200]}"
+                    _last_raw = f"JSON parse nahi hua - {r.text[:300]}"
                     continue
                 data = j.get("data", {}) if isinstance(j, dict) else {}
                 if not isinstance(data, dict):
                     data = {}
                 _last_ltp = str(safe_float(data.get("underlying_ltp", 0))) if data.get("underlying_ltp") is not None else _last_ltp
-                _last_raw = str(j)[:400]
+                _last_raw = str(j)[:600]
+                try:
+                    if isinstance(j, dict):
+                        _last_api_msg = str(j.get("debug_info") or j.get("message") or j.get("error") or _last_api_msg)
+                except:
+                    pass
                 _df_chain, _n = _parse_option_chain_data(data)
                 if _df_chain is not None and not _df_chain.empty and _n > 0:
-                    # Mil gayi - isi Expiry + Segment pe ruk jao, aage try mat karo (fast ke liye)
-                    return _df_chain, f"IND SE AAYA - {_n} strikes - Expiry {_expiry} - Segment {_seg_name} - Scrip {scrip} - LTP {_last_ltp}", _expiry, scrip, _last_ltp
-                # Strikes khali aaye - is combo pe haar mat mano, agle combo / agle Expiry pe jao (yehi photo wala fix hai)
+                    return _df_chain, f"IND SE AAYA - {_n} strikes - Expiry {_expiry} - {_combo_name} - Scrip {scrip} ({_src}) - LTP {_last_ltp}", _expiry, scrip, _last_ltp
                 continue
             except Exception as _e_combo:
                 _last_raw = f"Combo error - {_e_combo}"
                 continue
-    # Sab try kar liya, kahin se strikes nahi aaye
     _try_txt = " | ".join(_tried)
-    return pd.DataFrame(), f"IND se strikes khali aaye - Sab try kiya: {_try_txt} - Scrip {scrip} - LTP {_last_ltp} - Aakhri jawab: {_last_raw[:300]} - Token sahi hai (LTP aa gaya), Expiry / Segment ka combo nahi mila. Agli Expiry ya thodi der baad dobara try karo.", str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
+    _api_part = f" - API ne bola: {_last_api_msg}" if _last_api_msg else ""
+    return pd.DataFrame(), f"IND se strikes khali aaye - Scrip {scrip} ({_src}) - Sab try kiya: {_try_txt} - LTP {_last_ltp}{_api_part} - Aakhri jawab: {_last_raw[:500]} - Expiry / Segment ka combo nahi mila. Agli Expiry ya thodi der baad dobara try karo.", str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
 
 # ---------------- HISTORICAL DATA - INDstocks - TUMHARE PHOTO WALA PAGE ----------------
 def ind_get_historical_batch(scrip_codes, interval, start_ms, end_ms, token):
@@ -2433,7 +2448,7 @@ def ind_get_historical_batch(scrip_codes, interval, start_ms, end_ms, token):
     # Response: {"success": true, "data": {"NSE_3045": {"candles": [{"ts":..., "o":..., "h":..., "l":..., "c":..., "v":...}]}}}
     # Jo code ka data nahi hai, wo "data" me aayega hi nahi - isliye keys check karo.
     if not token or not scrip_codes:
-        return {}, "Token ya Scrip khali"
+        return {}, "Login ya Scrip khali"
     if len(scrip_codes) > 5:
         return {}, "Ek baar me max 5 scrip-codes - batching galat hui"
     try:
@@ -2680,28 +2695,6 @@ def nse_get_option_chain(symbol, session=None):
 # STEP 2: Sirf un 6 ko NSE pe check karte hain - jo NSE de de wo NSE se le lo.
 # STEP 3: Jo NSE nahi de paya / error / khali, wo sirf wahi cheez IND se mangte hain - sirf 6 stocks, isliye IND pe bojh hi nahi, fail hone ka chance hi nahi.
 #         Aur IND me bhi 5-5 batch nahi, 1-1 karke retry karenge, taaki 1 galat code se 5 na udein.
-def check_ind_token():
-    # V38 - Token chal raha hai ya expire ho gaya - 1 stock se check karo, poora Scan mat karo
-    # Returns (ok, msg) - ok=True matlab Token sahi hai, ok=False matlab Token daalna padega
-    try:
-        import streamlit as _st
-        _tok = _st.session_state.get("indmoney_secret", "")
-    except:
-        _tok = ""
-    if not _tok or len(str(_tok)) < 10:
-        return False, "Token khali hai - naya Token daalo (24 ghante me expire hota hai)"
-    try:
-        _smap = ind_get_all_scrips(_tok)
-        if not _smap:
-            return False, "Token se Scrip list nahi aayi - Token expire ho gaya lag raha hai, naya Token daalo"
-        _q, _msg = ind_quotes_full_docs_pattern(["NSE_2885"], _tok)
-        if _q:
-            return True, "Token chal raha hai - Scan dabao"
-        return False, f"Token se Quote nahi aaya - {_msg} - naya Token daalo"
-    except Exception as e:
-        return False, f"Token check me error - {e} - naya Token daalo"
-
-
 def scan_from_saved_history():
     # V38 - FALLBACK - IND se 0 aaya to bhi khali mat chhodo - GitHub me saved 5min + Daily se hi Score banao
     # Pichhle saved din ka data hai, Live nahi hai - isliye ispe "SAVED" likha rahega, Chain ke liye Token chahiye
@@ -3657,6 +3650,89 @@ def build_ai_live_fallback():
                 "crash_alerts": [], "news": [], "fallback_msg": f"Fallback me error - {e}"}
 
 
+_NEWS_RSS_CACHE = {}
+
+def fetch_stock_news_rss(stock, company=""):
+    # V44 - ASLI KHABAR INTERNET SE - Google News RSS, bina key ke.
+    # User ne sahi bola: Gap / Volume / VWAP / ORB se ye nahi pata chalta ki log KYU bech rahe hain -
+    # koi meeting hua, deal hua, results aaye, downgrade hua - ye sirf khabar se pata chalega.
+    # Isliye AI answer me pehle ye khabar aayegi, chart baad me. Cache 10 min - har sawaal pe dobara internet mat kholo.
+    # Fail ho to [] - app kabhi crash nahi hoga, jawaab me imandari se "khabar nahi mili" likh denge.
+    try:
+        _sym = str(stock or "").strip().upper()
+        if not _sym:
+            return []
+        _now = time.time()
+        _hit = _NEWS_RSS_CACHE.get(_sym)
+        if _hit and (_now - _hit[0] < 600):
+            return _hit[1]
+        import xml.etree.ElementTree as _ET
+        import urllib.parse as _up
+        import email.utils as _eu
+        _out = []
+        _queries = [f"{_sym} stock"]
+        if company and str(company).strip().upper() != _sym:
+            _queries.append(str(company).strip())
+        for _q in _queries:
+            try:
+                _url = "https://news.google.com/rss/search?q=" + _up.quote(_q) + "&hl=en-IN&gl=IN&ceid=IN:en"
+                _r = requests.get(_url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+                if _r.status_code != 200 or not _r.text:
+                    continue
+                _root = _ET.fromstring(_r.text)
+                for _it in _root.findall(".//item"):
+                    _tt = (_it.findtext("title") or "").strip()
+                    _src2 = ""
+                    _s_el = _it.find("source")
+                    if _s_el is not None and _s_el.text:
+                        _src2 = _s_el.text.strip()
+                    _pub = (_it.findtext("pubDate") or "").strip()
+                    _d = ""
+                    if _pub:
+                        try:
+                            _d = _eu.parsedate_to_datetime(_pub).strftime("%d %b %H:%M")
+                        except:
+                            _d = _pub[:16]
+                    if _tt and _tt not in [x["title"] for x in _out]:
+                        _out.append({"title": _tt, "source": _src2, "date": _d})
+                    if len(_out) >= 6:
+                        break
+                if _out:
+                    break
+            except:
+                continue
+        _NEWS_RSS_CACHE[_sym] = (_now, _out)
+        return _out
+    except:
+        return []
+
+def _news_theme_line(items):
+    # Khabaron se ek line ka matlab - sirf jo khabar me likha hai, wahi bolenge, kahani nahi banayenge.
+    try:
+        _all = " ".join([str(x.get("title", "")) for x in (items or [])]).lower()
+        _themes = []
+        if any(w in _all for w in ["acquir", "acquisition", "takeover", "stake", "merger", "buyout", "deal"]):
+            _themes.append("khabar me deal / acquisition / stake khareedne ki baat hai")
+        if "block deal" in _all:
+            _themes.append("bada block deal hua hai")
+        if "promoter" in _all:
+            _themes.append("promoter stake ki baat hai")
+        if any(w in _all for w in ["debt", "loan", "borrow"]):
+            _themes.append("karz / debt ki baat hai")
+        if any(w in _all for w in ["downgrade", "target cut", "cuts target"]):
+            _themes.append("broker ne downgrade kiya hai")
+        if any(w in _all for w in ["results", "profit", "q2", "q3", "earnings", "quarter"]):
+            _themes.append("results / profit ki khabar hai")
+        if any(w in _all for w in ["order", "contract"]):
+            _themes.append("naya order / contract mila hai")
+        if any(w in _all for w in ["probe", "raid", "fraud", "default", "sebi", "penalty"]):
+            _themes.append("jaanch / penalty / default jaisi negative khabar hai")
+        if not _themes:
+            return ""
+        return " | ".join(_themes[:2]) + " - isliye log bech / khareed rahe hain."
+    except:
+        return ""
+
 def ask_stock_ai(question):
     # V38 - AI Chat - ChatGPT jaisa, par sirf stock ke liye, aur sirf apne data se - banayi hui wajah nahi bolega
     # Kya batayega: Koi stock kyu bhaga / kyu gira - Gap, Volume, VWAP, ORB, News, Diary - sab number ke saath
@@ -3783,27 +3859,6 @@ def ask_stock_ai(question):
             _reasons.append(f"VWAP ({_vwap:.1f}) se neeche tha - bechne wale bhari the")
         if _orb == "✅" or _moved == "HAAN":
             _reasons.append("ORB toota tha - subah ke range se bahar nikla, isliye movement aaya")
-        # News - is stock ka naam wali khabar hai?
-        _news_hit = ""
-        try:
-            _ndf2 = fetch_global_news()
-            if _ndf2 is not None and not _ndf2.empty:
-                for _, _nr in _ndf2.iterrows():
-                    _nt = str(_nr.get("News", ""))
-                    if _stock in _nt.upper() or _stock.lower() in _nt.lower():
-                        _news_hit = _nt[:150]
-                        break
-            if not _news_hit:
-                _ai2 = load_ai_live() or {}
-                for _n2 in (_ai2.get("news", []) or []):
-                    _nt2 = str(_n2.get("title", ""))
-                    if _stock in _nt2.upper():
-                        _news_hit = _nt2[:150]
-                        break
-        except:
-            pass
-        if _news_hit:
-            _reasons.append(f"Khabar: {_news_hit}")
         # Diary - is stock me pehle kya hua
         _diary_hit = ""
         try:
@@ -3818,16 +3873,29 @@ def ask_stock_ai(question):
         if _diary_hit:
             _reasons.append(_diary_hit)
         if _is_up:
-            _parts.append("Kyu bhaga / upar gaya - data se ye wajah mili:")
+            _parts.append("Kyu bhaga / upar gaya - asli wajah:")
         elif _is_down:
-            _parts.append("Kyu gira / neeche gaya - data se ye wajah mili:")
+            _parts.append("Kyu gira / neeche gaya - asli wajah:")
         else:
-            _parts.append("Kya hua - data se ye dikha:")
+            _parts.append("Kya hua - asli wajah:")
+        # V44 - ASLI WAJAH PEHLE, CHART BAAD ME - Gap / Volume / VWAP / ORB se ye nahi pata chalta
+        # ki log KYU bech rahe hain. Isliye pehle internet (Google News RSS) se is stock ki aaj ki khabar.
+        _news_items = fetch_stock_news_rss(_stock)
+        if _news_items:
+            _parts.append("Asli Wajah (Aaj ki Khabar se - internet):")
+            for _ni in _news_items[:5]:
+                _parts.append(f"  - [{_ni.get('date', '')}] {_ni.get('title', '')} ({_ni.get('source', '')})")
+            _theme = _news_theme_line(_news_items)
+            if _theme:
+                _parts.append(f"Iska matlab: {_theme}")
+        else:
+            _parts.append("Aaj is stock ki koi badi khabar internet pe nahi mili - isliye neeche sirf chart wali wajah dikha rahe hain.")
+        _parts.append("Chart me kya dikha (sirf support ke liye):")
         if _reasons:
             for _r in _reasons:
                 _parts.append(f"  - {_r}")
         else:
-            _parts.append("  - Data me koi saaf wajah nahi mili - Gap, Volume, News me kuch khaas nahi tha. Iska matlab ye move bina wajah ka ya kisi aisi wajah se tha jo hamare data me nahi hai - ispe bharosa mat karo.")
+            _parts.append("  - Chart me koi saaf wajah nahi mili - Gap, Volume me kuch khaas nahi tha. Upar wali khabar hi asli wajah hai.")
         _ans = "\n".join(_parts)
         _save_ai_chat(_q, _ans)
         return _ans
@@ -4056,7 +4124,7 @@ def build_best_effort_call(row, chain_df, expiry, news_bias, learn_adj=0):
         _score = int(max(0, min(100, prob * 0.6)))
         if chain_df is None or chain_df.empty:
             return {"status": "NO_CHAIN", "stock": stock, "ltp": ltp, "prob": prob, "score": _score, "direction": direction, "movement_type": mtype,
-                    "reason": f"BEST EFFORT - Sab rule pass nahi hua ({_why_q}) - Score {_score}% - Chain bhi nahi aaya, Token check karo", "expiry": expiry or "",
+                    "reason": f"BEST EFFORT - Sab rule pass nahi hua ({_why_q}) - Score {_score}% - Chain bhi nahi aaya", "expiry": expiry or "",
                     "pattern": str(row.get("Pattern", "")), "movement_detail": str(row.get("Movement Detail", "")), "session": str(row.get("Session Story", ""))}
         lot = get_lot_for_stock(stock)
         check_df, best = check_all_strikes(chain_df, lot, ltp, direction, budget=5000)
@@ -4096,7 +4164,7 @@ def build_trade_call(row, chain_df, expiry, news_bias):
             return {"status": "NO_TRADE", "stock": stock, "ltp": ltp, "prob": prob, "direction": direction, "movement_type": mtype, "reason": why, "expiry": expiry or "", "pattern": str(row.get("Pattern", "")), "movement_detail": str(row.get("Movement Detail", "")), "session": str(row.get("Session Story", ""))}
         # 2) Chain check - chain nahi to NO_CHAIN
         if chain_df is None or chain_df.empty:
-            return {"status": "NO_CHAIN", "stock": stock, "ltp": ltp, "prob": prob, "direction": direction, "movement_type": mtype, "reason": "Rule to pass ho gaya, par IND se Option Chain nahi aaya - Token 24 ghante me expire hota hai, naya Token daal ke dobara SCAN karo.", "expiry": expiry or "", "pattern": str(row.get("Pattern", "")), "movement_detail": str(row.get("Movement Detail", "")), "session": str(row.get("Session Story", ""))}
+            return {"status": "NO_CHAIN", "stock": stock, "ltp": ltp, "prob": prob, "direction": direction, "movement_type": mtype, "reason": "Rule to pass ho gaya, par IND se Option Chain nahi aaya - dobara try karo", "expiry": expiry or "", "pattern": str(row.get("Pattern", "")), "movement_detail": str(row.get("Movement Detail", "")), "session": str(row.get("Session Story", ""))}
         # 3) Strike - Rs 5000 me 1 Lot wala, ATM ke sabse paas
         lot = get_lot_for_stock(stock)
         check_df, best = check_all_strikes(chain_df, lot, ltp, direction, budget=5000)
@@ -4177,7 +4245,7 @@ def _push_diary_to_github():
     # Kabhi bhi iski wajah se Diary save fail nahi hoga - try/except me hai
     try:
         if not GITHUB_TOKEN or not GITHUB_REPO:
-            return False, "GitHub Token Secrets me nahi hai, isliye sirf Local me save hua"
+            return False, "GitHub Secrets me nahi hai, isliye sirf Local me save hua"
         if not os.path.exists(CSV_FILE):
             return False, "CSV nahi hai"
         csv_text = open(CSV_FILE, encoding="utf-8").read()
@@ -4370,7 +4438,7 @@ if not st.session_state.authenticated:
 # ---------------- TOP BAR ----------------
 # V40 - System Health ek line me - Token / GitHub / Universe / Data - taaki 9:15 pe ek nazar me pata chale sab theek hai ya nahi. Cards / Dark Mode nahi - minimal hi rahega.
 try:
-    _tok_ok = "✅ Token" if st.session_state.get("indmoney_secret", "") else "❌ Token nahi"
+    _tok_ok = "✅ Login" if st.session_state.get("indmoney_secret", "") else "❌ Login nahi"
     _gh_ok = "✅ GitHub" if GITHUB_TOKEN and GITHUB_REPO else "❌ GitHub nahi"
     _uni_n = len(st.session_state.get("universe_216_df", pd.DataFrame())) if st.session_state.get("universe_216_df", None) is not None else 0
     st.caption(f"{_tok_ok} | {_gh_ok} | Universe: {_uni_n} stocks | Data: {data_freshness_line()}")
@@ -4407,7 +4475,7 @@ with top_right:
     if st.button("Download Data", use_container_width=True, key="top_download_data"):
         _tok_top = st.session_state.get("indmoney_secret", "")
         if not _tok_top or len(str(_tok_top)) < 10:
-            st.session_state["_master_dl_msg"] = "Pehle Token se Login karo"
+            st.session_state["_master_dl_msg"] = "Pehle Login karo"
         else:
             with st.spinner("Monthly Master Download ho raha hai... FNO + Equity + Index - GitHub me apne aap save ho raha hai..."):
                 _res_top, _msg_top = download_monthly_master_all(_tok_top)
@@ -4448,7 +4516,7 @@ if st.session_state.show_diary:
         if st.button("Download Data", use_container_width=True, key="diary_download_data"):
             _tok_d = st.session_state.get("indmoney_secret", "")
             if not _tok_d or len(str(_tok_d)) < 10:
-                st.session_state["_master_dl_msg"] = "Pehle Token se Login karo"
+                st.session_state["_master_dl_msg"] = "Pehle Login karo"
             else:
                 with st.spinner("Download ho raha hai..."):
                     _res_d, _msg_d = download_monthly_master_all(_tok_d)
@@ -4749,7 +4817,7 @@ with st.expander("AI Live - Market, News, Crash, Impact", expanded=True):
             _ai = build_ai_live_fallback()
             st.write("Saved data se - Worker nahi chala to bhi ye jaankari hai.")
         if _ai.get("fallback"):
-            st.write("Saved data se - Live nahi hai, Token daal ke Scan karo to Live aa jayega.")
+            st.write("Saved data se - Live nahi hai, Scan karo to Live aa jayega.")
         else:
             _mkt = _ai.get("market", {}) or {}
             _upd = str(_ai.get("updated_at", ""))
@@ -4859,13 +4927,6 @@ with st.expander("History", expanded=False):
     except Exception as e:
         st.write(f"History UI me Error - {e}")
 
-# V38 - Token Check - Scan se pehle Token sahi hai ya expire, ye 1 click me pata chalega
-if st.button("Token Check", use_container_width=True):
-    _tok_ok, _tok_msg = check_ind_token()
-    if _tok_ok:
-        st.success(_tok_msg)
-    else:
-        st.error(_tok_msg)
 if st.button("Scan", use_container_width=True):
     # V24 - SIRF IND SE SCAN - Yahoo / NSE band. Docs wala pattern hi sab jagah.
     # Pehle GitHub wali IND_Scrip_Codes.csv se Scrip-Code turant mil jayega (Download Data se jama hua).
@@ -5049,7 +5110,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
     df_scan = st.session_state.scan_df; indices_df = st.session_state.indices_data; news_df = st.session_state.news_data
     st.info(f"{st.session_state.get('scan_time','')} | {len(df_scan)} stocks")
     if st.session_state.get("scan_fallback"):
-        st.warning(f"Saved data se hai - Live nahi hai - {st.session_state.get('scan_fallback_msg','')} - Token daal ke dobara Scan karo to Live aa jayega.")
+        st.warning(f"Saved data se hai - Live nahi hai - {st.session_state.get('scan_fallback_msg','')} - dobara Scan karo to Live aa jayega.")
     # ---------------- V28 - FINAL CALL SABSE UPAR - Yehi mool function hai, data jama karna nahi ----------------
     # Pehle ye sabse neeche Section 6 me tha - wahan tak pahunchne ke liye 216-row wali 2 table + Debug + IND Fill scroll karna padta tha.
     # Ab SCAN ke turant baad yahin dikhega: Rule se chuna gaya 1 stock + uski Chain + Rs 5000 wala Strike + Entry / SL / Target + BUY / SELL.
@@ -5380,11 +5441,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             _chain_msg_show = st.session_state.get(f'chain_source_{sel_stock}','')
             st.error(f"❌ Option Chain nahi aaya - Wajah: {_chain_msg_show}")
             st.write("")
-            # V43 - Har baar "Token check karo" bolna galat tha - Token sahi ho to wajah Expiry / Scrip / Segment hoti hai, wo upar wali line me hai
-            if "Token" in _chain_msg_show:
-                st.write("Token check karo - Token expire ho to naya daalo")
-            else:
-                st.write("Token sahi lag raha hai - wajah upar wali line me hai (Expiry / Scrip / Segment ka combo nahi mila). Thodi der baad dobara try karo, ya Download Data se Master FNO dobara lo.")
+            st.write("Dobara try karo, ya Download Data se Master FNO dobara lo.")
         else:
             st.info("Chain Mango dabao")
 else:
@@ -5401,9 +5458,9 @@ else:
             st.write(f"Scrip Map: {_dbg_e.get('scrip_map_size')} entries - 216 se kam hai to bahut stock ka Code hi nahi mila.")
         if _dbg_e.get("first_fail_reason"):
             st.write(f"Pehli fail wajah: {_dbg_e.get('first_fail_reason')}")
-        st.write("Kya karo: 1) Token Check dabao - Token expire hai to naya Token daalo | 2) Download Data dabao - Saved data aayega | 3) Phir Scan dabao.")
+        st.write("Kya karo: 1) Download Data dabao - Saved data aayega | 2) Phir Scan dabao.")
         if _dbg_e.get("fallback_msg"):
             st.write(f"Saved se bhi nahi mila: {_dbg_e.get('fallback_msg')}")
         if st.button("Telegram", use_container_width=True, key="empty_telegram"):
-            _ok_t = send_telegram("Scan khali aaya - koi stock nahi mila. Token check karke dobara Scan dabao.")
+            _ok_t = send_telegram("Scan khali aaya - koi stock nahi mila. Dobara Scan dabao.")
             st.success("Chala gaya ✅") if _ok_t else st.error("Nahi gaya ❌")
