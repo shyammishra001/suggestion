@@ -1,0 +1,30 @@
+# .github/workflows/ai_worker.yml - GitHub me is naam se daalo: .github/workflows/ai_worker.yml
+# AI Worker har 15 min me apne aap chalega - bina bole, market hours me
+# Koi secret is file me nahi hai - TELEGRAM_TOKEN / TELEGRAM_CHAT_ID GitHub Secrets me daalna hai
+# GITHUB_TOKEN GitHub apne aap deta hai, daalna nahi padta
+
+name: AI Worker
+
+on:
+  schedule:
+    # Har 15 min, Som-Shukr, 03:30-10:30 UTC = 09:00-16:00 IST (market hours)
+    - cron: "*/15 3-10 * * 1-5"
+    # Subah 8 baje IST = 02:30 UTC - pre-market ek baar
+    - cron: "30 2 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  ai:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: AI Worker chalao
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: python ai_worker.py --once
