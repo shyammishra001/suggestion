@@ -1,4 +1,4 @@
-# app.py - V42 - Scanner
+# app.py - V43 - Scanner
 # ============================================================================================
 import streamlit as st
 import pandas as pd
@@ -53,7 +53,7 @@ except:
 APP_DIR = Path(__file__).resolve().parent  # app.py jis folder me hai, wahi folder - bagal wali file yahin hai
 MASTER_FOLDER = "data"  # V33 - GitHub me sab master data ek hi folder me - bahar root me nahi. Diary alag hai, wo trades_diary me hi rahegi.
 
-APP_VERSION = 42  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
+APP_VERSION = 43  # V43 - Chain ki asli wajah + Fill datetime fix + AI branch fallback  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
 def data_freshness_line():
     # Data taaza hai ya nahi - bas yehi dikhayenge, kahan se aaya ye nahi.
     # Taaza = Aaj ka Scan isi session me ho gaya, ya Universe file aaj ki hai. Nahi to - Download Data dabao.
@@ -1322,6 +1322,12 @@ def tf_candles_for_stock(tf_df, stock, trading_day=None):
             _sub["Time"] = pd.to_datetime(_sub["DATE"].astype(str), errors="coerce")
         else:
             return pd.DataFrame()
+        # V43 FIX - Fill Error wali jad: CSV se Time bina timezone (naive) aata hai, baad me end_dt (IST, aware) se compare hota hai -> "can't compare offset-naive and offset-aware" -> poora Fill gir jata tha, Scan 0 aata tha. Isliye yahin pe IST laga do.
+        try:
+            if _sub["Time"].dt.tz is None:
+                _sub["Time"] = _sub["Time"].dt.tz_localize(IST)
+        except:
+            pass
         _sub = _sub.dropna(subset=["Time"])
         if trading_day is not None:
             _sub = _sub[_sub["Time"].dt.date == trading_day]
@@ -3000,6 +3006,12 @@ def ind_fill_for_selected(selected_stocks, token, scrip_map):
         if _pairs_delta_5min:
             # Delta ka start - sabka alag Last hai, isliye sabse purana Last le ke ek hi window me mango, phir merge karte time purana duplicate hata denge
             _earliest_last = min([_last_cached_by_stock[s] for s, _ in _pairs_delta_5min if _last_cached_by_stock.get(s) is not None])
+            # V43 FIX - _earliest_last kabhi naive ho to IST laga do, nahi to _delta_start < end_dt pe wahi Fill Error
+            try:
+                if _earliest_last is not None and getattr(_earliest_last, "tzinfo", None) is None:
+                    _earliest_last = _earliest_last.replace(tzinfo=IST)
+            except:
+                pass
             _delta_start = _earliest_last + timedelta(minutes=5) if _earliest_last is not None else start_dt
             if _delta_start < end_dt:
                 _r5d, _l5d = ind_historical_5x5_with_retry(_pairs_delta_5min, "5minute", to_ms(_delta_start), to_ms(end_dt), token)
@@ -3564,13 +3576,16 @@ def load_ai_live():
     except:
         pass
     if _data is None and GITHUB_REPO:
-        try:
-            _r = requests.get(f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{MASTER_FOLDER}/ai_live.json", timeout=10)
-            if _r.status_code == 200 and len(_r.text.strip()) > 20:
-                import json as _js
-                _data = _js.loads(_r.text)
-        except:
-            pass
+        # V43 - Branch main ho ya master, dono try karo - repo ki default branch jo bhi ho, AI mil jayega
+        for _branch in ["main", "master"]:
+            try:
+                _r = requests.get(f"https://raw.githubusercontent.com/{GITHUB_REPO}/{_branch}/{MASTER_FOLDER}/ai_live.json", timeout=10)
+                if _r.status_code == 200 and len(_r.text.strip()) > 20:
+                    import json as _js
+                    _data = _js.loads(_r.text)
+                    break
+            except:
+                continue
     try:
         import streamlit as _st
         if _data is not None:
@@ -4705,10 +4720,7 @@ if st.session_state.get("single_result"):
                 _s_sugg = {"date": datetime.now().strftime("%Y-%m-%d"), "time": datetime.now().strftime("%H:%M:%S"), "symbol": _s_call['stock'], "strike": _s_call['strike'], "opt_type": _s_call['opt_type'], "entry": float(_s_call['entry']), "sl": float(_s_call['sl']), "target": float(_s_call['target']), "qty_lots": 1, "qty_total": int(_s_call['lot']), "capital_used": float(_s_call['cost']), "risk": float(_s_call['max_loss']), "status": "OPEN", "reason": f"Single Search - Prob {_s_call['prob']:.0f} - {_s_call['movement_type']}", "conditions": _s_call.get('rule_line','')}
                 if st.button("Telegram", use_container_width=True, key="single_call_notify"):
                     _ok_s = send_strike(_s_call['stock'], _s_call['strike'], _s_call['opt_type'], _s_call['entry'], _s_call['sl'], _s_call['target'], _s_call['cost'], _s_call['lot'], _s_call['expiry'], str(_s_call['movement_type']))
-                    if _ok_s:
-                        st.success("Chala gaya ✅")
-                    else:
-                        st.error("Nahi gaya ❌")
+                    st.success("Chala gaya ✅") if _ok_s else st.error("Nahi gaya ❌")
                 if st.button(f"{_stk} ko Diary me Save Karo", use_container_width=True, key="single_call_diary"):
                     save_trade(_s_sugg); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
             else:
@@ -5086,10 +5098,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         with _c1:
             if st.button("Telegram", use_container_width=True, key="final_call_notify"):
                 _ok_fc = send_strike(_final_call['stock'], _final_call['strike'], _final_call['opt_type'], _final_call['entry'], _final_call['sl'], _final_call['target'], _final_call['cost'], _final_call['lot'], _final_call['expiry'], str(_final_call['movement_type']))
-                if _ok_fc:
-                    st.success("Chala gaya ✅")
-                else:
-                    st.error("Nahi gaya ❌")
+                st.success("Chala gaya ✅") if _ok_fc else st.error("Nahi gaya ❌")
         with _c2:
             if st.button("Diary", use_container_width=True, key="final_call_diary"):
                 save_trade(_fc_sugg); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
@@ -5108,10 +5117,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         with _c1b:
             if st.button("Telegram", use_container_width=True, key="best_effort_notify"):
                 _ok_be = send_strike(_final_call['stock'], _final_call['strike'], _final_call['opt_type'], _final_call['entry'], _final_call['sl'], _final_call['target'], _final_call['cost'], _final_call['lot'], _final_call['expiry'], str(_final_call['movement_type']))
-                if _ok_be:
-                    st.success("Chala gaya ✅")
-                else:
-                    st.error("Nahi gaya ❌")
+                st.success("Chala gaya ✅") if _ok_be else st.error("Nahi gaya ❌")
         with _c2b:
             if st.button("Diary", use_container_width=True, key="best_effort_diary"):
                 save_trade(_fc_sugg2); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
@@ -5135,20 +5141,14 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             st.rerun()
         if st.button("Telegram - Top 5", use_container_width=True, key="nochain_telegram"):
             _ok_nc = send_top5(df_scan.head(5), "")
-            if _ok_nc:
-                st.success("Chala gaya ✅")
-            else:
-                st.error("Nahi gaya ❌")
+            st.success("Chala gaya ✅") if _ok_nc else st.error("Nahi gaya ❌")
     elif _final_call and _final_call.get("status") == "NO_FIT":
         st.warning(f"Rule pass hai - {_final_call.get('stock','')} - Prob {_final_call.get('prob',0):.0f}/100 - par Rs 5000 wala strike nahi mila")
         st.write(f"Wajah: {_final_call.get('reason','')}")
         st.write(f"Movement: {_final_call.get('movement_type','')} - {_final_call.get('movement_detail','')}")
         if st.button("Telegram - Top 5", use_container_width=True, key="nofit_telegram"):
             _ok_nf = send_top5(df_scan.head(5), "")
-            if _ok_nf:
-                st.success("Chala gaya ✅")
-            else:
-                st.error("Nahi gaya ❌")
+            st.success("Chala gaya ✅") if _ok_nf else st.error("Nahi gaya ❌")
     else:
         _nt_stock = _final_call.get('stock','') if _final_call else ""
         _nt_prob = _final_call.get('prob',0) if _final_call else 0
@@ -5159,10 +5159,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         st.write("Top 5 neeche dekh lo - koi 50+ wala ho to usko Single Search me alag se check karo, par jab tak Movement suru nahi hota, entry mat lo.")
         if st.button("Telegram - Top 5", use_container_width=True, key="notrade_telegram"):
             _ok_nt = send_top5(df_scan.head(5), "")
-            if _ok_nt:
-                st.success("Chala gaya ✅")
-            else:
-                st.error("Nahi gaya ❌")
+            st.success("Chala gaya ✅") if _ok_nt else st.error("Nahi gaya ❌")
 
     # 3-STEP DEBUG - Har step me kitne aaye, kyu fail hua, sab dikhao - chhupao mat
     _dbg1 = st.session_state.get("step1_debug", {})
@@ -5306,7 +5303,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
                     _ind_msg = _cmap2[sel_stock].get("msg", "")
                 if _ind_oc is not None and not _ind_oc.empty and len(_ind_oc) >= 5:
                     st.session_state[f"chain_{sel_stock}"] = _ind_oc
-                    st.session_state[f"chain_source_{sel_stock}"] = "OK"
+                    st.session_state[f"chain_source_{sel_stock}"] = _ind_msg if _ind_msg else "Chain Map se aaya (msg khali tha)"
                     st.session_state[f"expiry_{sel_stock}"] = _cmap2[sel_stock].get("expiry", "")
                     st.session_state[f"scrip_{sel_stock}"] = f"NSE_{scrip_used}"
                     st.session_state[f"indltp_{sel_stock}"] = sel_ltp
@@ -5316,7 +5313,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
                     scrip_map_now = ind_get_all_scrips(token_now) if token_now else {}
                     chain_df, source, expiry_yyyy, scrip_used, ind_ltp = ind_get_option_chain(sel_stock, token_now, scrip_map_now)
                     st.session_state[f"chain_{sel_stock}"] = chain_df
-                    st.session_state[f"chain_source_{sel_stock}"] = "OK"
+                    st.session_state[f"chain_source_{sel_stock}"] = source
                     st.session_state[f"expiry_{sel_stock}"] = expiry_yyyy
                     st.session_state[f"scrip_{sel_stock}"] = scrip_used
                     st.session_state[f"indltp_{sel_stock}"] = ind_ltp
@@ -5380,9 +5377,14 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             else:
                 st.error(f"{sel_stock} me Rs 5000 me koi 1 Lot wala contract nahi mila.")
         elif chain_key in st.session_state and (st.session_state[chain_key] is None or st.session_state[chain_key].empty):
-            st.error(f"❌ Option Chain nahi aaya - Wajah: {st.session_state.get(f'chain_source_{sel_stock}','')}")
+            _chain_msg_show = st.session_state.get(f'chain_source_{sel_stock}','')
+            st.error(f"❌ Option Chain nahi aaya - Wajah: {_chain_msg_show}")
             st.write("")
-            st.write("Token check karo")
+            # V43 - Har baar "Token check karo" bolna galat tha - Token sahi ho to wajah Expiry / Scrip / Segment hoti hai, wo upar wali line me hai
+            if "Token" in _chain_msg_show:
+                st.write("Token check karo - Token expire ho to naya daalo")
+            else:
+                st.write("Token sahi lag raha hai - wajah upar wali line me hai (Expiry / Scrip / Segment ka combo nahi mila). Thodi der baad dobara try karo, ya Download Data se Master FNO dobara lo.")
         else:
             st.info("Chain Mango dabao")
 else:
@@ -5404,7 +5406,4 @@ else:
             st.write(f"Saved se bhi nahi mila: {_dbg_e.get('fallback_msg')}")
         if st.button("Telegram", use_container_width=True, key="empty_telegram"):
             _ok_t = send_telegram("Scan khali aaya - koi stock nahi mila. Token check karke dobara Scan dabao.")
-            if _ok_t:
-                st.success("Chala gaya ✅")
-            else:
-                st.error("Nahi gaya ❌")
+            st.success("Chala gaya ✅") if _ok_t else st.error("Nahi gaya ❌")
