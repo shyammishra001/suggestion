@@ -2065,12 +2065,12 @@ def ind_historical_5x5_with_retry(symbols_with_scrip, interval, start_ms, end_ms
                             else:
                                 result[sname] = {"candles": [], "mode": "SINGLE-1", "ok": False, "msg": f"1-1 me bhi nahi aaya - {m1} - Ho sakta hai is stock ka IND Code galat hai ya is din data hi nahi hai, Master CSV me Code check karo"}
                                 logs.append(f"  -> {sname}: 1-1 ❌ - Batch + Single dono me nahi aaya - Master CSV me iska Code check karo")
-                            time.sleep(0.2)
+                            time.sleep(0.35)
                         except Exception as e:
                             result[sname] = {"candles": [], "mode": "SINGLE-1", "ok": False, "msg": f"1-1 Error - {e}"}
                             logs.append(f"  -> {sname}: 1-1 ❌ Error - {e}")
                 # Batch ke baad thoda ruk jao - 5/sec limit na toote
-                time.sleep(0.2)
+                time.sleep(0.35)
                 continue
             else:
                 # Batch poora fail hua - data khali aaya ya success=False - ab 5 ko 1-1 karke dalenge
@@ -2092,7 +2092,7 @@ def ind_historical_5x5_with_retry(symbols_with_scrip, interval, start_ms, end_ms
                 else:
                     result[sname] = {"candles": [], "mode": "SINGLE-1", "ok": False, "msg": f"Batch + 1-1 dono fail - {m1} - Master CSV me iska Sahi Naam + Secret Code check karo"}
                     logs.append(f"  -> {sname}: 1-1 ❌ - Batch + Single dono fail - Master CSV me Code check karo")
-                time.sleep(0.2)
+                time.sleep(0.35)
             except Exception as e:
                 result[sname] = {"candles": [], "mode": "SINGLE-1", "ok": False, "msg": f"1-1 Error - {e}"}
                 logs.append(f"  -> {sname}: 1-1 ❌ Error - {e}")
@@ -2414,6 +2414,13 @@ def ind_get_historical_batch(scrip_codes, interval, start_ms, end_ms, token):
     try:
         params = {"scrip-codes": ",".join(scrip_codes), "start_time": int(start_ms), "end_time": int(end_ms)}
         r = requests.get(f"{IND_BASE}/market/historical/{interval}", headers=ind_headers(token), params=params, timeout=15)
+        # V41 - 429 aaya to turant haar mat maano - 2 sec ruk ke ek baar dobara try karo, phir bhi 429 hai to hi fail bolo
+        if r.status_code == 429:
+            try:
+                time.sleep(2)
+                r = requests.get(f"{IND_BASE}/market/historical/{interval}", headers=ind_headers(token), params=params, timeout=15)
+            except:
+                pass
         if r.status_code != 200:
             return {}, f"Historical Fail {r.status_code} - {r.text[:400]}"
         j = r.json()
@@ -4513,6 +4520,7 @@ st.write("")
 _single_input = st.text_input("Stock", placeholder="RELIANCE", key="single_stock_input")
 _single_resolved = None
 _single_sugg = []
+_single_opts_216 = []  # V41 - Pehle se khali, nahi to RELIANCE / SBI milte hi NameError aata tha - wahi photo wala crash
 if _single_input:
     _single_resolved, _single_sugg = resolve_stock_name(_single_input)
     if _single_resolved:
@@ -4522,10 +4530,16 @@ if _single_input:
         _single_resolved = st.selectbox("Chuno", _single_sugg, key="single_stock_select")
     else:
         st.warning("Nahi mila")
-        # Dropdown me sab dikha do taaki wahan se chun sake
+        # Dropdown me sab dikha do taaki wahan se chun sake - Ye selectbox SIRF is else me hai
+        # Pehle ye bahar tha, isliye RELIANCE milne pe bhi chalta tha aur _single_opts_216 bana hi nahi hota tha -> NameError -> poora app girta tha
         _raw_opts = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
-        _single_opts_216, _ = normalize_universe_to_symbols(_raw_opts, pd.DataFrame({"STOCK": _raw_opts}))
-    _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216)} stocks", _single_opts_216, key="single_stock_all_select")
+        try:
+            _single_opts_216, _ = normalize_universe_to_symbols(_raw_opts, pd.DataFrame({"STOCK": _raw_opts}))
+        except Exception:
+            _single_opts_216 = list(MARKET_STOCKS.keys())
+        _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216)} stocks", [""] + _single_opts_216, key="single_stock_all_select")
+        if _single_resolved == "":
+            _single_resolved = None
 else:
     # Khali hai to bhi Dropdown de do - wahan se bhi chun sakte ho
     # V39 - FIX: Search wala hissa kabhi poora app nahi girayega - pehle se khali karke rakho, phir bharo
