@@ -481,8 +481,59 @@ def ind_get_all_scrips(token):
                 return out
     except:
         pass
-    # GitHub file nahi mili to sirf KNOWN_SCRIP do - API se instruments mat mango (tumne mana kiya hai)
+    # V39 - FIX: GitHub file nahi mili to sirf 64 KNOWN_SCRIP pe atakna band - 216 me se 152 ka Code hi nahi milega, isliye 0/216 aata tha
+    # Token sahi hone pe bhi file ke bina Scan khali aata tha - isliye ab LIVE API se hi laayenge (wahi API jo Download Data use karta hai)
+    # Ye Expiry wala Exchange/Segment request nahi hai - Instruments Master hai, isliye mana hua wala niyam nahi tootega
+    try:
+        _live = ind_fetch_instruments_map(token)
+        if _live and len(_live) > len(KNOWN_SCRIP):
+            return _live
+    except Exception:
+        pass
     return dict(KNOWN_SCRIP)
+
+
+def ind_fetch_instruments_map(token):
+    # V39 - IND se live Instruments Master (equity + fno) - CSV aati hai, usse {SYMBOL: SECURITY_ID} banao
+    # Sirf tab chalega jab GitHub file nahi mili - normal flow me file se hi chalega, API baar-baar nahi bulaega
+    if not token or len(str(token).strip()) < 10:
+        return {}
+    _out = dict(KNOWN_SCRIP)
+    try:
+        for _src in ["equity", "fno"]:
+            try:
+                _r = requests.get(f"{IND_BASE}/market/instruments", headers=ind_headers(token), params={"source": _src}, timeout=30)
+                if _r.status_code != 200:
+                    continue
+                import io as _io2
+                _df = pd.read_csv(_io2.StringIO(_r.text), dtype=str, keep_default_na=False)
+                if _df is None or _df.empty or "SECURITY_ID" not in _df.columns:
+                    continue
+                # NSE pehle, BSE baad me - RELIANCE ka NSE 2885 jeetega, BSE 500325 nahi
+                try:
+                    if "EXCH" in _df.columns:
+                        _df = _df.copy()
+                        _df["_er"] = _df["EXCH"].astype(str).str.strip().str.upper().map(lambda x: 0 if x == "NSE" else 1)
+                        _df = _df.sort_values("_er", kind="stable").drop(columns=["_er"])
+                except:
+                    pass
+                for _, _row in _df.iterrows():
+                    try:
+                        _sid = str(_row.get("SECURITY_ID", "")).strip()
+                        if not _sid or _sid.lower() == "nan":
+                            continue
+                        for _col in ["SYMBOL_NAME", "TRADING_SYMBOL", "CUSTOM_SYMBOL"]:
+                            if _col in _df.columns:
+                                _sym = str(_row.get(_col, "")).strip().upper()
+                                if _sym and _sym != "NAN" and _sym not in _out:
+                                    _out[_sym] = _sid
+                    except:
+                        continue
+            except:
+                continue
+    except Exception:
+        pass
+    return _out
     # V20 - Iske neeche wala purana API wala code hata diya - ab API se instruments nahi mangte, sirf GitHub File se Security ID lete hain
 
 # ---------------- V18 - KAAM 1: MASTER CSV DOWNLOAD BUTTON ----------------
@@ -1649,6 +1700,22 @@ def update_history_cache_after_scan(scan_rows_by_stock, trading_day):
 # 3) Phir Exact, phir Contains (REL in RELIANCE), phir Subsequence (TCHM ke letter T-C-H-M, TECHM me isi order me hain - isliye TCHM -> TECHM)
 # 4) Phir GitHub CSV File se bhi dhoondo - us CSV me SYMBOL_NAME, TRADING_SYMBOL, CUSTOM_SYMBOL, UNDERLYING_SCRIP_NAME - kisi me bhi naam milega to wahi stock hai.
 FULL_NAME_ALIASES = {
+    "STATE BANK OF INDIA": "SBIN", "STATEBANKOFINDIA": "SBIN",
+    "HDFC BANK LIMITED": "HDFCBANK", "HDFCBANKLIMITED": "HDFCBANK",
+    "ICICI BANK LIMITED": "ICICIBANK", "ICICIBANKLIMITED": "ICICIBANK",
+    "TATA MOTORS LIMITED": "TATAMOTORS", "TATAMOTORSLIMITED": "TATAMOTORS",
+    "TATA STEEL LIMITED": "TATASTEEL", "TATASTEELLIMITED": "TATASTEEL",
+    "HINDUSTAN UNILEVER LIMITED": "HINDUNILVR", "HINDUSTANUNILEVERLIMITED": "HINDUNILVR",
+    "ITC LIMITED": "ITC", "ITCLIMITED": "ITC",
+    "LARSEN AND TOUBRO LIMITED": "LT", "LARSENANDTOUBROLIMITED": "LT", "LARSEN & TOUBRO LIMITED": "LT",
+    "BAJAJ FINANCE LIMITED": "BAJAJFINANCE", "BAJAJFINANCELIMITED": "BAJAJFINANCE",
+    "MARUTI SUZUKI INDIA LIMITED": "MARUTI", "MARUTISUZUKIINDIALIMITED": "MARUTI",
+    "TITAN COMPANY LIMITED": "TITAN", "TITANCOMPANYLIMITED": "TITAN",
+    "SUN PHARMACEUTICAL INDUSTRIES LIMITED": "SUNPHARMA", "SUNPHARMACEUTICALINDUSTRIESLIMITED": "SUNPHARMA",
+    "NTPC LIMITED": "NTPC", "NTPCLIMITED": "NTPC",
+    "POWER GRID CORPORATION OF INDIA LIMITED": "POWERGRID", "POWERGRIDCORPORATIONOFINDIALIMITED": "POWERGRID",
+    "OIL AND NATURAL GAS CORPORATION LIMITED": "ONGC", "OILANDNATURALGASCORPORATIONLIMITED": "ONGC",
+    "COAL INDIA LIMITED": "COALINDIA", "COALINDIALIMITED": "COALINDIA",
     "TECHMAHINDRA": "TECHM", "TECHM": "TECHM", "TCHM": "TECHM", "TECHMAHINDRA LIMITED": "TECHM",
     "RELIANCE": "RELIANCE", "RELIANCEINDUSTRIES": "RELIANCE", "RELIANCEINDUSTRIESLIMITED": "RELIANCE", "RIL": "RELIANCE", "REL": "RELIANCE", "R E L": "RELIANCE",
     "TATAMOTORS": "TATAMOTORS", "TATAMOTOR": "TATAMOTORS", "TATAMOTORSLIMITED": "TATAMOTORS",
@@ -2151,8 +2218,15 @@ def download_history_tf_month(token, universe_stocks, scrip_map_dict):
 def ind_get_scrip(symbol, token, scrip_map=None):
     # V22 - Naam se Search nahi, Code se Search - symbol yahan pe sirf Suggestion ke liye aaya hai, andar Code se hi khojenge.
     # Code pehle se hi Master File (Download Data se GitHub me save hui) me hai, isliye Error aayega hi nahi.
+    # V39 - FIX: "STATE BANK OF INDIA" jaisa full naam aaye to pehle Symbol (SBIN) me badlo, phir Code khojo - nahi to Code kabhi nahi milega
     if scrip_map and str(symbol).upper() in scrip_map:
         return str(scrip_map[str(symbol).upper()]), "MAP - Code se"
+    try:
+        _sym2, _ = resolve_to_symbol(str(symbol))
+        if _sym2 and scrip_map and str(_sym2).upper() in scrip_map:
+            return str(scrip_map[str(_sym2).upper()]), "MAP - Full naam se Symbol bana ke"
+    except:
+        pass
     if symbol in KNOWN_SCRIP:
         return KNOWN_SCRIP[symbol], "KNOWN"
     try:
@@ -2567,6 +2641,138 @@ def nse_get_option_chain(symbol, session=None):
 # STEP 2: Sirf un 6 ko NSE pe check karte hain - jo NSE de de wo NSE se le lo.
 # STEP 3: Jo NSE nahi de paya / error / khali, wo sirf wahi cheez IND se mangte hain - sirf 6 stocks, isliye IND pe bojh hi nahi, fail hone ka chance hi nahi.
 #         Aur IND me bhi 5-5 batch nahi, 1-1 karke retry karenge, taaki 1 galat code se 5 na udein.
+def check_ind_token():
+    # V38 - Token chal raha hai ya expire ho gaya - 1 stock se check karo, poora Scan mat karo
+    # Returns (ok, msg) - ok=True matlab Token sahi hai, ok=False matlab Token daalna padega
+    try:
+        import streamlit as _st
+        _tok = _st.session_state.get("indmoney_secret", "")
+    except:
+        _tok = ""
+    if not _tok or len(str(_tok)) < 10:
+        return False, "Token khali hai - naya Token daalo (24 ghante me expire hota hai)"
+    try:
+        _smap = ind_get_all_scrips(_tok)
+        if not _smap:
+            return False, "Token se Scrip list nahi aayi - Token expire ho gaya lag raha hai, naya Token daalo"
+        _q, _msg = ind_quotes_full_docs_pattern(["NSE_2885"], _tok)
+        if _q:
+            return True, "Token chal raha hai - Scan dabao"
+        return False, f"Token se Quote nahi aaya - {_msg} - naya Token daalo"
+    except Exception as e:
+        return False, f"Token check me error - {e} - naya Token daalo"
+
+
+def scan_from_saved_history():
+    # V38 - FALLBACK - IND se 0 aaya to bhi khali mat chhodo - GitHub me saved 5min + Daily se hi Score banao
+    # Pichhle saved din ka data hai, Live nahi hai - isliye ispe "SAVED" likha rahega, Chain ke liye Token chahiye
+    # Score wahi 100-point wala: Gap 15 + VWAP 15 + ORB 20 + Volume 15 + Movement 15 + Trending 10 + Volatility 10
+    try:
+        _td = get_trading_day()
+        _mm = tf_yyyymm(_td)
+        _df5 = load_tf_month("5min", _mm)
+        _dfd = load_tf_month("daily", _mm)
+        if _df5 is None or _df5.empty:
+            return pd.DataFrame(), "Saved 5min data nahi hai - pehle Download Data dabao"
+        # Aakhri saved din nikalo - usi din ka scan banega
+        try:
+            _df5["_DT"] = pd.to_datetime(_df5["TIME"].astype(str), errors="coerce")
+            _last_day = _df5["_DT"].dt.date.max()
+            _day5 = _df5[_df5["_DT"].dt.date == _last_day].copy()
+        except:
+            _last_day = None
+            _day5 = _df5.copy()
+        if _day5.empty:
+            return pd.DataFrame(), "Saved data me aakhri din nahi mila"
+        rows = []
+        # Daily se pichhla close + avg volume nikalo
+        _prev_close = {}
+        _avg_vol = {}
+        try:
+            if _dfd is not None and not _dfd.empty and "STOCK" in _dfd.columns:
+                _dfd2 = _dfd.copy()
+                _dfd2["_DT2"] = pd.to_datetime(_dfd2["TIME"].astype(str), errors="coerce")
+                for _sym, _g in _dfd2.groupby(_sym if False else _dfd2["STOCK"].astype(str).str.upper()):
+                    try:
+                        _g2 = _g.sort_values("_DT2")
+                        if len(_g2) >= 2:
+                            _prev_close[str(_sym).upper()] = safe_float(_g2.iloc[-2]["CLOSE"])
+                        _avg_vol[str(_sym).upper()] = safe_float(pd.to_numeric(_g2["VOLUME"], errors="coerce").tail(5).mean())
+                    except:
+                        continue
+        except:
+            pass
+        for _sym, _g in _day5.groupby(_day5["STOCK"].astype(str).str.upper()):
+            try:
+                _g2 = _g.sort_values("_DT")
+                if len(_g2) < 5:
+                    continue
+                _open = safe_float(_g2.iloc[0]["OPEN"]); _close = safe_float(_g2.iloc[-1]["CLOSE"])
+                _high = safe_float(pd.to_numeric(_g2["HIGH"], errors="coerce").max()); _low = safe_float(pd.to_numeric(_g2["LOW"], errors="coerce").min())
+                _vol_today = safe_float(pd.to_numeric(_g2["VOLUME"], errors="coerce").sum())
+                _first3 = _g2.head(3)
+                _orb_h = safe_float(pd.to_numeric(_first3["HIGH"], errors="coerce").max()); _orb_l = safe_float(pd.to_numeric(_first3["LOW"], errors="coerce").min())
+                _prev = _prev_close.get(str(_sym).upper(), _open)
+                _gap = ((_open - _prev) / _prev * 100) if _prev else 0.0
+                try:
+                    _tp = (pd.to_numeric(_g2["HIGH"], errors="coerce") + pd.to_numeric(_g2["LOW"], errors="coerce") + pd.to_numeric(_g2["CLOSE"], errors="coerce")) / 3
+                    _vv = pd.to_numeric(_g2["VOLUME"], errors="coerce")
+                    _vwap = safe_float((_tp * _vv).sum() / _vv.sum()) if _vv.sum() > 0 else _close
+                except:
+                    _vwap = _close
+                _avgv = _avg_vol.get(str(_sym).upper(), 0)
+                _volx = (_vol_today / _avgv) if _avgv else 1.0
+                _orb_break = bool(_close > _orb_h or _close < _orb_l)
+                _moved = "HAAN" if _orb_break else "NAHI"
+                _move_pct = ((_close - _open) / _open * 100) if _open else 0.0
+                if _close > _vwap and _close > _open:
+                    _dir = "BULLISH"
+                elif _close < _vwap and _close < _open:
+                    _dir = "BEARISH"
+                else:
+                    _dir = "NEUTRAL"
+                if _move_pct >= 2:
+                    _mtype = "BHAG RAHA UPAR"
+                elif _move_pct <= -2:
+                    _mtype = "GIR RAHA"
+                elif abs(_move_pct) < 0.5:
+                    _mtype = "SIDEWAYS"
+                else:
+                    _mtype = "TRENDING"
+                # Score - wahi 100-point wala
+                _score = 0
+                if abs(_gap) > 0.30: _score += 15
+                if (_close > _vwap and _gap > 0) or (_close < _vwap and _gap < 0): _score += 15
+                if _orb_break: _score += 20
+                if _volx > 1.5: _score += 15
+                if _moved == "HAAN": _score += 15
+                if abs(_move_pct) >= 1: _score += 10
+                if "SIDEWAYS" not in _mtype: _score += 10
+                _score = max(0, min(100, int(_score)))
+                _pass = sum([abs(_gap) > 0.30, (_close > _vwap and _gap > 0) or (_close < _vwap and _gap < 0), _orb_break, _volx > 1.5])
+                rows.append({
+                    "Stock": str(_sym).upper(), "LTP": _close, "Probability %": _score, "Score": _score,
+                    "Gap %": round(_gap, 2), "Gap": "✅" if abs(_gap) > 0.30 else "❌",
+                    "VWAP": _vwap, "VWAP_OK": "✅" if ((_close > _vwap and _gap > 0) or (_close < _vwap and _gap < 0)) else "❌",
+                    "ORB High": _orb_h, "ORB Low": _orb_l, "ORB": "✅" if _orb_break else "❌", "ORB Break": _orb_break,
+                    "Vol x": round(_volx, 2), "Volume": "✅" if _volx > 1.5 else "❌",
+                    "Movement Started?": _moved, "Movement Type": _mtype, "Movement": _mtype,
+                    "Direction": _dir, "Pass": f"{_pass}/4", "Pass_Count": _pass,
+                    "Volatility OK": "✅" if "SIDEWAYS" not in _mtype else "❌", "Fake?": "NAHI",
+                    "Wick": 0.0, "Reversal": 0, "Source": "SAVED", "Pattern": "", "Movement Detail": f"Saved din {_last_day} - Gap {_gap:+.2f}% - Vol {_volx:.1f}x - {_mtype}",
+                    "Session Story": f"Saved data se - {_last_day}", "Day Range %": round(((_high - _low) / _open * 100) if _open else 0, 2),
+                    "Trending Score": 60 if abs(_move_pct) >= 1 else 30, "Fake Breakout": False,
+                })
+            except:
+                continue
+        df = pd.DataFrame(rows) if rows else pd.DataFrame()
+        if not df.empty:
+            df = df.sort_values("Probability %", ascending=False).reset_index(drop=True)
+        return df, f"Saved din {_last_day} se {len(df)} stocks ka Score bana"
+    except Exception as e:
+        return pd.DataFrame(), f"Saved scan me error - {e}"
+
+
 def ind_scan_all_ind_only(progress_cb=None):
     # V25 - SIRF IND SE SCAN - 216 STOCKS - Yahoo / NSE band. Docs wala pattern hi sab jagah.
     # Universe: Master FNO se DISTINCT UNDERLYING = 216 stocks (138 wala purana list nahi).
@@ -2591,6 +2797,7 @@ def ind_scan_all_ind_only(progress_cb=None):
             debug["ind_fail"] = list(_universe_216)
             return pd.DataFrame(), debug
         scrip_map = ind_get_all_scrips(token) if token else dict(KNOWN_SCRIP)
+        debug["scrip_map_size"] = len(scrip_map) if isinstance(scrip_map, dict) else 0
         all_syms = list(_universe_216)
         quote_by_sym = {}
         _closed = is_market_closed_for_scan(get_trading_day())
@@ -2616,6 +2823,8 @@ def ind_scan_all_ind_only(progress_cb=None):
                 f = filled.get(stock, {})
                 if not f.get("ok"):
                     debug["ind_fail"].append(stock)
+                    if "first_fail_reason" not in debug:
+                        debug["first_fail_reason"] = str(f.get("reason", ""))[:200]
                     continue
                 ana = f.get("ana", {})
                 if not ana or "error" in ana:
@@ -3362,6 +3571,254 @@ def load_ai_memory():
     return None
 
 
+def build_ai_live_fallback():
+    # V38 - Worker nahi chala to bhi AI Live khali nahi rahega - App ke saved data + News se hi bana do
+    try:
+        _dfb, _msgb = scan_from_saved_history()
+        _up = _down = 0
+        _avg_gap = 0.0
+        if _dfb is not None and not _dfb.empty:
+            _up = int((_dfb["Gap %"] > 0).sum()) if "Gap %" in _dfb.columns else 0
+            _down = int((_dfb["Gap %"] < 0).sum()) if "Gap %" in _dfb.columns else 0
+            _avg_gap = round(safe_float(_dfb["Gap %"].mean()), 2) if "Gap %" in _dfb.columns else 0.0
+        if _up >= _down * 1.5 and _up >= 10:
+            _dir = "BULLISH"
+        elif _down >= _up * 1.5 and _down >= 10:
+            _dir = "BEARISH"
+        else:
+            _dir = "SIDEWAYS"
+        _news_f = []
+        try:
+            _ndf = fetch_global_news()
+            if _ndf is not None and not _ndf.empty:
+                for _, _r in _ndf.head(10).iterrows():
+                    _news_f.append({"title": str(_r.get("News", "")), "type": "OTHER", "direction": str(_r.get("Impact", "")), "impact": "Is khabar ka asar dekhne ke liye AI se Puchho me stock ka naam likho"})
+        except:
+            pass
+        _alerts = []
+        if _down >= 150:
+            _alerts.append(f"POORA MARKET NEECHE - Saved data me 216 me se {_down} neeche")
+        elif _up >= 150:
+            _alerts.append(f"POORA MARKET UPAR - Saved data me 216 me se {_up} upar")
+        return {"updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "fallback": True,
+                "market": {"direction": _dir, "nifty": 0, "nifty_change_pct": _avg_gap, "bank_nifty": 0, "bank_nifty_change_pct": 0, "sensex": 0, "sensex_change_pct": 0, "vix": 0, "advance": _up, "decline": _down},
+                "crash_alerts": _alerts, "news": _news_f, "fallback_msg": _msgb}
+    except Exception as e:
+        return {"updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "fallback": True,
+                "market": {"direction": "SIDEWAYS", "nifty": 0, "nifty_change_pct": 0, "bank_nifty": 0, "bank_nifty_change_pct": 0, "sensex": 0, "sensex_change_pct": 0, "vix": 0, "advance": 0, "decline": 0},
+                "crash_alerts": [], "news": [], "fallback_msg": f"Fallback me error - {e}"}
+
+
+def ask_stock_ai(question):
+    # V38 - AI Chat - ChatGPT jaisa, par sirf stock ke liye, aur sirf apne data se - banayi hui wajah nahi bolega
+    # Kya batayega: Koi stock kyu bhaga / kyu gira - Gap, Volume, VWAP, ORB, News, Diary - sab number ke saath
+    # Jo data me nahi hai, uspe "pata nahi" bolega, kahani nahi banayega
+    # Har sawaal-jawaab data/ai_chat.json me judta jayega (kabhi delete nahi hoga) - isi se AI seekhega
+    try:
+        _q = str(question or "").strip()
+        if not _q:
+            return "Sawaal likho - jaise 'RELIANCE kyu bhaga?' ya 'Market kyu gira?'"
+        _qu = _q.upper()
+        # 1) Stock dhoondho - sawaal me kaunsa stock hai
+        _stock = ""
+        try:
+            import streamlit as _st2
+            _sdf = _st2.session_state.get("scan_df", None)
+            _cands = []
+            if _sdf is not None and not _sdf.empty and "Stock" in _sdf.columns:
+                _cands = [str(x).upper() for x in _sdf["Stock"].tolist()]
+            for _k in list(MARKET_STOCKS.keys()):
+                if _k not in _cands:
+                    _cands.append(str(_k).upper())
+            for _c in _cands:
+                if _c and len(_c) >= 3 and _c in _qu:
+                    _stock = _c
+                    break
+            if not _stock:
+                # V39 - FIX: Poora sawaal ek saath nahi, tukde-tukde karke dekho - "SBI kyu bhaga?" me "SBI" alag se milega -> SBIN
+                _words = _q.replace("?", " ").replace(",", " ").split()
+                _found = ""
+                for _n in (4, 3, 2, 1):
+                    for _i in range(0, max(0, len(_words) - _n + 1)):
+                        _phrase = " ".join(_words[_i:_i+_n])
+                        try:
+                            _s2, _ = resolve_to_symbol(_phrase)
+                        except:
+                            _s2 = None
+                        if _s2:
+                            _found = str(_s2).upper()
+                            break
+                    if _found:
+                        break
+                if _found:
+                    _stock = _found
+                else:
+                    _sym2, _sugg2 = resolve_to_symbol(_q)
+                    if _sym2:
+                        _stock = str(_sym2).upper()
+        except:
+            pass
+        # 2) General sawaal - Market / Crash / Best
+        if not _stock:
+            if any(w in _qu for w in ["MARKET", "NIFTY", "CRASH", "SENSEX", "POORA"]):
+                _ai = load_ai_live()
+                if not _ai:
+                    _ai = build_ai_live_fallback()
+                _m = (_ai or {}).get("market", {}) or {}
+                _ans = f"Market: {_m.get('direction', '')} - Upar: {_m.get('advance', '')} | Neeche: {_m.get('decline', '')}"
+                _cr = (_ai or {}).get("crash_alerts", []) or []
+                if _cr:
+                    _ans += "\nCrash: " + " | ".join(_cr)
+                else:
+                    _ans += "\nKoi crash nahi hai."
+                _nw = (_ai or {}).get("news", []) or []
+                if _nw:
+                    _ans += "\nBadi khabar: " + str(_nw[0].get("title", ""))[:120]
+                _save_ai_chat(_q, _ans)
+                return _ans
+            if any(w in _qu for w in ["BEST", "TOP", "KAUN SA", "KON SA", "KAUNSA"]):
+                try:
+                    import streamlit as _st3
+                    _sdf3 = _st3.session_state.get("scan_df", None)
+                    if _sdf3 is not None and not _sdf3.empty:
+                        _top = _sdf3.iloc[0]
+                        _ans = f"Top stock: {str(_top.get('Stock',''))} - Score {safe_float(_top.get('Probability %',0)):.0f}/100 - {str(_top.get('Direction',''))} - {str(_top.get('Movement Type',''))} - Gap {safe_float(_top.get('Gap %',0)):+.2f}% - Vol {safe_float(_top.get('Vol x',0)):.1f}x"
+                        _save_ai_chat(_q, _ans)
+                        return _ans
+                except:
+                    pass
+                _ans = "Abhi Scan nahi hua hai - pehle Scan dabao, phir Best stock bata paunga."
+                _save_ai_chat(_q, _ans)
+                return _ans
+            _ans = "Kis stock ke baare me puchh rahe ho, naam likho - jaise 'RELIANCE kyu bhaga?'"
+            _save_ai_chat(_q, _ans)
+            return _ans
+        # 3) Stock wala sawaal - Row + News + Diary + History se jawaab banao
+        _row = None
+        try:
+            import streamlit as _st4
+            _sdf4 = _st4.session_state.get("scan_df", None)
+            if _sdf4 is not None and not _sdf4.empty and "Stock" in _sdf4.columns:
+                _m4 = _sdf4[_sdf4["Stock"].astype(str).str.upper() == _stock]
+                if not _m4.empty:
+                    _row = _m4.iloc[0]
+        except:
+            pass
+        if _row is None:
+            try:
+                _dfb2, _ = scan_from_saved_history()
+                if _dfb2 is not None and not _dfb2.empty and "Stock" in _dfb2.columns:
+                    _m5 = _dfb2[_dfb2["Stock"].astype(str).str.upper() == _stock]
+                    if not _m5.empty:
+                        _row = _m5.iloc[0]
+            except:
+                pass
+        if _row is None:
+            _ans = f"{_stock} ka data abhi nahi hai - pehle Scan ya Download Data dabao, phir bata paunga."
+            _save_ai_chat(_q, _ans)
+            return _ans
+        _gap = safe_float(_row.get("Gap %", 0)); _volx = safe_float(_row.get("Vol x", 0)); _ltp = safe_float(_row.get("LTP", 0))
+        _vwap = safe_float(_row.get("VWAP", 0)); _orb = str(_row.get("ORB", "")); _moved = str(_row.get("Movement Started?", ""))
+        _mtype = str(_row.get("Movement Type", "")); _dir = str(_row.get("Direction", "")); _score = safe_float(_row.get("Probability %", 0))
+        _is_up = "BHAGA" in _qu or "UPAR" in _qu or "BADHA" in _qu or "TEZ" in _qu
+        _is_down = "GIRA" in _qu or "NEECHE" in _qu or "CRASH" in _qu or "GIR" in _qu
+        _parts = []
+        _parts.append(f"{_stock} - LTP Rs {_ltp:.1f} - Score {_score:.0f}/100 - {_dir} - {_mtype}")
+        _reasons = []
+        if abs(_gap) >= 0.5:
+            _reasons.append(f"Gap {_gap:+.2f}% tha - khulte hi {'upar' if _gap > 0 else 'neeche'} khula")
+        if _volx >= 1.5:
+            _reasons.append(f"Volume {_volx:.1f}x tha - normal se zyada log khareed/bech rahe the")
+        if _ltp > _vwap and _dir == "BULLISH":
+            _reasons.append(f"VWAP ({_vwap:.1f}) se upar tha - khareedne wale bhari the")
+        elif _ltp < _vwap and _dir == "BEARISH":
+            _reasons.append(f"VWAP ({_vwap:.1f}) se neeche tha - bechne wale bhari the")
+        if _orb == "✅" or _moved == "HAAN":
+            _reasons.append("ORB toota tha - subah ke range se bahar nikla, isliye movement aaya")
+        # News - is stock ka naam wali khabar hai?
+        _news_hit = ""
+        try:
+            _ndf2 = fetch_global_news()
+            if _ndf2 is not None and not _ndf2.empty:
+                for _, _nr in _ndf2.iterrows():
+                    _nt = str(_nr.get("News", ""))
+                    if _stock in _nt.upper() or _stock.lower() in _nt.lower():
+                        _news_hit = _nt[:150]
+                        break
+            if not _news_hit:
+                _ai2 = load_ai_live() or {}
+                for _n2 in (_ai2.get("news", []) or []):
+                    _nt2 = str(_n2.get("title", ""))
+                    if _stock in _nt2.upper():
+                        _news_hit = _nt2[:150]
+                        break
+        except:
+            pass
+        if _news_hit:
+            _reasons.append(f"Khabar: {_news_hit}")
+        # Diary - is stock me pehle kya hua
+        _diary_hit = ""
+        try:
+            _dd = get_all_trades()
+            if _dd is not None and not _dd.empty and "symbol" in _dd.columns:
+                _dg = _dd[_dd["symbol"].astype(str).str.upper() == _stock]
+                if not _dg.empty:
+                    _last = _dg.iloc[-1]
+                    _diary_hit = f"Diary me isme pichhli baar {str(_last.get('status',''))} hua tha (Entry Rs {safe_float(_last.get('entry',0))})"
+        except:
+            pass
+        if _diary_hit:
+            _reasons.append(_diary_hit)
+        if _is_up:
+            _parts.append("Kyu bhaga / upar gaya - data se ye wajah mili:")
+        elif _is_down:
+            _parts.append("Kyu gira / neeche gaya - data se ye wajah mili:")
+        else:
+            _parts.append("Kya hua - data se ye dikha:")
+        if _reasons:
+            for _r in _reasons:
+                _parts.append(f"  - {_r}")
+        else:
+            _parts.append("  - Data me koi saaf wajah nahi mili - Gap, Volume, News me kuch khaas nahi tha. Iska matlab ye move bina wajah ka ya kisi aisi wajah se tha jo hamare data me nahi hai - ispe bharosa mat karo.")
+        _ans = "\n".join(_parts)
+        _save_ai_chat(_q, _ans)
+        return _ans
+    except Exception as e:
+        return f"AI se puchhne me error - {e} - pehle Scan ya Download Data dabao"
+
+
+def _save_ai_chat(question, answer):
+    # V38 - Har sawaal-jawaab judta jayega, kabhi delete nahi hoga - isi se AI seekhega
+    try:
+        import json as _js
+        _rec = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "q": str(question)[:300], "a": str(answer)[:2000]}
+        _existing = []
+        try:
+            for _cand in [APP_DIR / MASTER_FOLDER / "ai_chat.json", Path.cwd() / MASTER_FOLDER / "ai_chat.json"]:
+                if _cand.is_file():
+                    _existing = _js.loads(_cand.read_text(encoding="utf-8", errors="ignore")) or []
+                    break
+        except:
+            _existing = []
+        if not isinstance(_existing, list):
+            _existing = []
+        _existing.append(_rec)
+        _existing = _existing[-500:]
+        _txt = _js.dumps(_existing, ensure_ascii=False, indent=2)
+        try:
+            _push_master_to_github("ai_chat.json", _txt)
+        except:
+            pass
+        try:
+            _p = APP_DIR / MASTER_FOLDER / "ai_chat.json"
+            _p.parent.mkdir(parents=True, exist_ok=True)
+            _p.write_text(_txt, encoding="utf-8")
+        except:
+            pass
+    except:
+        pass
+
+
 def fetch_global_news():
     news_rows = []; seen = set()
     for ticker in ["^NSEI", "^NSEBANK", "^BSESN"]:
@@ -4011,9 +4468,19 @@ if _single_input:
     _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216)} stocks", _single_opts_216, key="single_stock_all_select")
 else:
     # Khali hai to bhi Dropdown de do - wahan se bhi chun sakte ho
-    _raw_opts_b = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
-    _single_opts_216b, _ = normalize_universe_to_symbols(_raw_opts_b, pd.DataFrame({"STOCK": _raw_opts_b}))
-    _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216b)} stocks", [""] + _single_opts_216b, key="single_stock_dropdown_empty")
+    # V39 - FIX: Search wala hissa kabhi poora app nahi girayega - pehle se khali karke rakho, phir bharo
+    _single_opts_216b = []
+    _single_resolved = None
+    try:
+        _raw_opts_b = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
+        _single_opts_216b, _ = normalize_universe_to_symbols(_raw_opts_b, pd.DataFrame({"STOCK": _raw_opts_b}))
+    except Exception:
+        _single_opts_216b = list(MARKET_STOCKS.keys())
+    try:
+        _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216b)} stocks", [""] + _single_opts_216b, key="single_stock_dropdown_empty")
+    except Exception as _e_sel:
+        st.write(f"Search me error - {_e_sel} - neeche wale AI se Puchho se puchh lo")
+        _single_resolved = None
     if _single_resolved == "":
         _single_resolved = None
 if _single_resolved:
@@ -4021,7 +4488,15 @@ if _single_resolved:
     # Pehle Code nikal lo, phir dikhao - taaki pata chale naam se nahi, Code se search ho raha hai
     try:
         _map_single = ind_get_all_scrips(st.session_state.get("indmoney_secret", ""))
-        _code_single = _map_single.get(_single_resolved, _map_single.get(_single_resolved.upper(), ""))
+        # V39 - FIX: "STATE BANK OF INDIA" chuna ho to pehle SBIN banao, phir Code khojo - full naam se Code kabhi nahi milega
+        _single_sym = _single_resolved
+        try:
+            _rs, _ = resolve_to_symbol(str(_single_resolved))
+            if _rs:
+                _single_sym = str(_rs).upper()
+        except:
+            pass
+        _code_single = _map_single.get(_single_sym, _map_single.get(str(_single_sym).upper(), ""))
         if _code_single:
             st.success(f"{_single_resolved} - {_code_single}")
         else:
@@ -4038,6 +4513,7 @@ if _single_resolved:
             # Yahoo / NSE se kuch nahi mangenge - teenon ka Compromise Mix band.
             _tok3 = st.session_state.get("indmoney_secret", "")
             _scrip_map3 = ind_get_all_scrips(_tok3) if _tok3 else dict(KNOWN_SCRIP)
+            # V39 - ind_get_scrip khud full naam -> Symbol kar lega, yahan bhi wahi bhej do
             _sid3, _src3 = ind_get_scrip(_single_resolved, _tok3, _scrip_map3)
             _scrip_code3 = f"NSE_{_sid3}" if _sid3 else ""
             _ind_ana = None; _ind_msg = ""; _ind_chain = pd.DataFrame(); _ind_chain_msg = ""; _ind_quote = None; _ind_quote_msg = ""
@@ -4184,7 +4660,11 @@ with st.expander("AI Live - Market, News, Crash, Impact", expanded=True):
     try:
         _ai = load_ai_live()
         if not _ai:
-            st.write("AI abhi tak chala nahi hai - thodi der baad phir dekho.")
+            # V38 - Worker nahi chala to bhi khali nahi - Saved data + News se hi bana do
+            _ai = build_ai_live_fallback()
+            st.write("Saved data se - Worker nahi chala to bhi ye jaankari hai.")
+        if _ai.get("fallback"):
+            st.write("Saved data se - Live nahi hai, Token daal ke Scan karo to Live aa jayega.")
         else:
             _mkt = _ai.get("market", {}) or {}
             _upd = str(_ai.get("updated_at", ""))
@@ -4218,6 +4698,24 @@ with st.expander("AI Live - Market, News, Crash, Impact", expanded=True):
                     st.write(f"  - {str(_pt.get('text', ''))}")
     except Exception as _e_ai:
         st.write(f"AI Live me error - {_e_ai}")
+
+# ---------------- V38 - AI CHAT - ChatGPT jaisa, par sirf stock ke liye ----------------
+# Har stock ka kyu bhaga / kyu gira - apne data se batayega, banayi hui wajah nahi bolega
+with st.expander("AI se Puchho - Koi bhi stock kyu bhaga / kyu gira", expanded=False):
+    try:
+        _q_in = st.text_input("Sawaal", placeholder="RELIANCE kyu bhaga? ya Market kyu gira?", key="ai_chat_input")
+        if st.button("Puchho", use_container_width=True, key="ai_chat_ask"):
+            if _q_in:
+                with st.spinner("AI soch raha hai..."):
+                    _ans = ask_stock_ai(_q_in)
+                st.write(_ans)
+                st.session_state["ai_chat_last"] = _ans
+            else:
+                st.write("Sawaal likho - jaise 'RELIANCE kyu bhaga?'")
+        elif st.session_state.get("ai_chat_last"):
+            st.write(st.session_state.get("ai_chat_last"))
+    except Exception as _e_chat:
+        st.write(f"AI Chat me error - {_e_chat}")
 
 # Manual News wala stock - jaise BHEL me 2.5 lakh crore ka deal hua to BHEL bhag sakta hai, wo Yahoo Top 5 me nahi bhi ho to bhi hum usko Step 2 me lenge
 st.markdown("### News")
@@ -4276,6 +4774,13 @@ with st.expander("History", expanded=False):
     except Exception as e:
         st.write(f"History UI me Error - {e}")
 
+# V38 - Token Check - Scan se pehle Token sahi hai ya expire, ye 1 click me pata chalega
+if st.button("Token Check", use_container_width=True):
+    _tok_ok, _tok_msg = check_ind_token()
+    if _tok_ok:
+        st.success(_tok_msg)
+    else:
+        st.error(_tok_msg)
 if st.button("Scan", use_container_width=True):
     # V24 - SIRF IND SE SCAN - Yahoo / NSE band. Docs wala pattern hi sab jagah.
     # Pehle GitHub wali IND_Scrip_Codes.csv se Scrip-Code turant mil jayega (Download Data se jama hua).
@@ -4294,6 +4799,27 @@ if st.button("Scan", use_container_width=True):
         else:
             df_step1, debug1 = ind_scan_all_ind_only()
             st.session_state.scan_trading_day = str(_td_now)
+        # V38 - FIX: Photo me Checked 0/216 tha - IND se 0 aaya, isliye koi stock nahi mila - ab Saved data se bhi stock denge, khali nahi chhodenge
+        _fallback_used = False
+        _fallback_msg = ""
+        try:
+            _ok_n = int((debug1 or {}).get("ind_ok", 0))
+        except:
+            _ok_n = 0
+        if (df_step1 is None or df_step1.empty or _ok_n == 0) and not _reuse:
+            try:
+                _dfb, _msgb = scan_from_saved_history()
+                if _dfb is not None and not _dfb.empty:
+                    df_step1 = _dfb
+                    debug1 = dict(debug1 or {})
+                    debug1["fallback"] = True
+                    debug1["fallback_msg"] = _msgb
+                    _fallback_used = True
+                    _fallback_msg = _msgb
+            except Exception as _e_fb:
+                _fallback_msg = f"Saved fallback me error - {_e_fb}"
+        st.session_state["scan_fallback"] = _fallback_used
+        st.session_state["scan_fallback_msg"] = _fallback_msg
         st.session_state.scan_df = df_step1
         st.session_state.step1_debug = debug1
         st.session_state.scan_time = datetime.now().strftime("%H:%M:%S")
@@ -4437,6 +4963,8 @@ def _safe_cols(df, wanted):
 if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
     df_scan = st.session_state.scan_df; indices_df = st.session_state.indices_data; news_df = st.session_state.news_data
     st.info(f"{st.session_state.get('scan_time','')} | {len(df_scan)} stocks")
+    if st.session_state.get("scan_fallback"):
+        st.warning(f"Saved data se hai - Live nahi hai - {st.session_state.get('scan_fallback_msg','')} - Token daal ke dobara Scan karo to Live aa jayega.")
     # ---------------- V28 - FINAL CALL SABSE UPAR - Yehi mool function hai, data jama karna nahi ----------------
     # Pehle ye sabse neeche Section 6 me tha - wahan tak pahunchne ke liye 216-row wali 2 table + Debug + IND Fill scroll karna padta tha.
     # Ab SCAN ke turant baad yahin dikhega: Rule se chuna gaya 1 stock + uski Chain + Rs 5000 wala Strike + Entry / SL / Target + BUY / SELL.
@@ -4773,11 +5301,19 @@ else:
     # V33 - Scan khali aaya to neeche blank mat chhodo - pehle blank rehta tha, isliye lagta tha Best Stock + Telegram gayab ho gaya. Ab wajah + Telegram dikhega.
     if st.session_state.get("scan_time"):
         st.markdown("### Best Stock")
-        st.warning("Nahi mila - Dobara Scan dabao")
+        st.warning("Nahi mila - Koi data nahi hai")
         _dbg_e = st.session_state.get("step1_debug", {})
         _ok_e = _dbg_e.get("ind_ok", 0)
         _tot_e = _dbg_e.get("ind_total", 216)
-        st.write(f"Checked: {_ok_e}/{_tot_e} - Agar 0 hai to Token naya daalo, phir Scan dabao.")
+        st.write(f"Checked: {_ok_e}/{_tot_e} - 0 hai to matlab IND se data aaya hi nahi.")
+        # V39 - Asli wajah dikhao, Token pe ilzaam nahi - Scrip Map kitna bada tha, pehli fail kis wajah se hui
+        if _dbg_e.get("scrip_map_size") is not None:
+            st.write(f"Scrip Map: {_dbg_e.get('scrip_map_size')} entries - 216 se kam hai to bahut stock ka Code hi nahi mila.")
+        if _dbg_e.get("first_fail_reason"):
+            st.write(f"Pehli fail wajah: {_dbg_e.get('first_fail_reason')}")
+        st.write("Kya karo: 1) Token Check dabao - Token expire hai to naya Token daalo | 2) Download Data dabao - Saved data aayega | 3) Phir Scan dabao.")
+        if _dbg_e.get("fallback_msg"):
+            st.write(f"Saved se bhi nahi mila: {_dbg_e.get('fallback_msg')}")
         if st.button("Telegram", use_container_width=True, key="empty_telegram"):
             _ok_t = send_telegram("Scan khali aaya - koi stock nahi mila. Token check karke dobara Scan dabao.")
             st.success("Chala gaya ✅") if _ok_t else st.error("Nahi gaya ❌")
