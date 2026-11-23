@@ -20,7 +20,7 @@ try:
 except:
     IST = timezone(timedelta(hours=5, minutes=30))
 
-st.set_page_config(page_title="Scanner V31 - Search + Scan Symbol Fix - Fast - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix", layout="wide")
+st.set_page_config(page_title="Scan Stock", layout="wide")
 
 # ---------------- CONFIG ----------------
 CAPITAL = 5000
@@ -177,6 +177,22 @@ def get_last_trading_day():
 def get_trading_day():
     return get_last_trading_day()
 
+def is_market_closed_for_scan(trading_day=None):
+    # V32 - Market band hai to dobara IND se mat mango - cache se hi best stock do. Pehle har rescan me quotes + candle dobara mangta tha, isliye har baar utna hi time lagta tha.
+    try:
+        _now = ist_now()
+        if trading_day is None:
+            trading_day = get_trading_day()
+        if trading_day != _now.date():
+            return True
+        if _now.hour > 15 or (_now.hour == 15 and _now.minute >= 30):
+            return True
+        if _now.hour < 9 or (_now.hour == 9 and _now.minute < 15):
+            return True
+        return False
+    except:
+        return False
+
 def get_scan_window(trading_day):
     # Scan kisi bhi time ho sakta hai - 09:20, 09:30, 09:35, 01:00, 02:00, raat ko - isliye FIXED 09:20 mat karo.
     # Start hamesha 09:15, End = abhi kitna baja hai, us hisab se.
@@ -296,14 +312,15 @@ def ind_load_master_from_github_file():
     # Agar file GitHub pe nahi mili to (None, msg) - tab KNOWN_SCRIP se kaam chalega, fail nahi hoga.
     # Tum CSV bhej doge to hum bhi isi naam se rakh denge, tum GitHub pe bhi isi naam se upload kar dena.
     # Pehle IND_master_index dhoondo - yahi tumne bola hai
-    for fname in ["IND_master_index.csv", "IND_Master_Index.csv", "IND_Master_index.csv", "ind_master_index.csv", "IND_Master_Index.CSV"]:
+    # V32 - Equity/FNO pehle, Index aakhiri - Index file (92 rows) me stock ka BSE ID hota hai, usko Equity samajh ke stock ka ID mat lo
+    for fname in ["IND_Master_Equity.csv", "IND_Master_Equity.CSV", "ind_master_equity.csv", "IND_Master_FNO.csv", "IND_master_fno.csv"]:
         try:
             df, _m = read_local_csv(fname)
             if df is not None and not df.empty:
-                return df, f"Same Folder se turant - {fname} - {len(df)} rows - IND_master_index wali File - {_m}"
+                return df, f"Same Folder se turant - {fname} - {len(df)} rows - {_m}"
         except:
             continue
-    for fname in ["IND_Master_Equity.csv", "IND_Master_Equity.CSV", "ind_master_equity.csv", "IND_Master_FNO.csv", "IND_master_fno.csv"]:
+    for fname in ["IND_master_index.csv", "IND_Master_Index.csv", "IND_Master_index.csv", "ind_master_index.csv", "IND_Master_Index.CSV"]:
         try:
             df, _m = read_local_csv(fname)
             if df is not None and not df.empty:
@@ -321,7 +338,7 @@ def ind_load_master_from_github_file():
                 return _up, f"Download Data se aaya - {_key} - {len(_up)} rows - GitHub me bhi save ho gaya hai"
     except:
         pass
-    return None, "GitHub pe IND_master_index.csv nahi mila - Upar wala Download Data dabao, Streamlit ke GitHub Code se apne aap Download ho ke GitHub me save ho jayega. Tumko Upload nahi karna hai."
+    return None, "File nahi mili - Download Data dabao."
 
 def ind_get_all_scrips(token):
     # V19: Pehle GitHub wali Master CSV File se lo - usme sab stock ka Sahi Naam + Secret Code likha hua hai.
@@ -343,19 +360,34 @@ def ind_get_all_scrips(token):
         _sc_df, _sc_msg = read_local_csv("IND_Scrip_Codes.csv")
         if _sc_df is not None and not _sc_df.empty and "SECURITY_ID" in _sc_df.columns:
             _out = dict(KNOWN_SCRIP)
+            # V32 - NSE pehle, BSE baad me - Equity me RELIANCE ke 2 row hote hain: NSE 2885 + BSE 500325. Pehle BSE wala overwrite kar deta tha, isliye NSE_500325 banta tha jo hota hi nahi, Search/Scan khali aata tha. Ab NSE hi jeetega.
+            try:
+                if "EXCH" in _sc_df.columns:
+                    _sc_df = _sc_df.copy()
+                    _sc_df["_exch_rank"] = _sc_df["EXCH"].astype(str).str.strip().str.upper().map(lambda x: 0 if x == "NSE" else 1)
+                    _sc_df = _sc_df.sort_values("_exch_rank", kind="stable").drop(columns=["_exch_rank"])
+            except:
+                pass
             _sym_col = "STOCK" if "STOCK" in _sc_df.columns else ("SYMBOL_NAME" if "SYMBOL_NAME" in _sc_df.columns else None)
             if _sym_col:
                 for _sym, _sid in zip(_sc_df[_sym_col].astype(str), _sc_df["SECURITY_ID"].astype(str)):
                     _sym = _sym.strip().upper(); _sid = _sid.strip()
                     if _sym and _sym != "NAN" and _sid and _sid.lower() != "nan":
-                        _out[_sym] = _sid
+                        # KNOWN_SCRIP wala sahi NSE ID bhi BSE se overwrite nahi hoga - sirf khali wale me bharo
+                        if _sym not in _out or _out.get(_sym) in ("", None):
+                            _out[_sym] = _sid
+                        elif _sym in KNOWN_SCRIP:
+                            pass
+                        else:
+                            # Scrip_Codes me pehle wala NSE hai, baad wala BSE hai - pehle wala hi rakho
+                            pass
                 for _col2 in ["TRADING_SYMBOL", "CUSTOM_SYMBOL", "UNDERLYING_SCRIP_NAME"]:
                     if _col2 in _sc_df.columns:
                         for _sym2, _sid2 in zip(_sc_df[_col2].astype(str), _sc_df["SECURITY_ID"].astype(str)):
                             _sym2 = _sym2.strip().upper(); _sid2 = _sid2.strip()
                             if _sym2 and _sym2 != "NAN" and _sid2 and _sid2.lower() != "nan":
-                                # Full naam se bhi Code mile - "ADANI ENERGY SOLUTION LTD" likha to bhi 10217 mile - isliye har naam ko key banao, sirf naya wala hi nahi
-                                _out[_sym2] = _sid2
+                                if _sym2 not in _out:
+                                    _out[_sym2] = _sid2
                 if len(_out) > len(KNOWN_SCRIP):
                     return _out
     except:
@@ -376,16 +408,18 @@ def ind_get_all_scrips(token):
                                 continue
                             # Index file ho to 2nd column Naam hai, nahi to SYMBOL_NAME / TRADING_SYMBOL
                             if len(list(_df_s.columns)) == 3 and "SYMBOL_NAME" not in _df_s.columns:
+                                # V32 - 3-column Index file se sirf Index lo, stock mat lo - isme RELIANCE jaisa stock BSE ID (500325) se hota hai, NSE 2885 se nahi
                                 _nm_s = str(_row.iloc[1]).strip().upper() if len(_row) > 1 else ""
-                                if _nm_s and _nm_s != "NAN":
-                                    _merged[_nm_s] = _sid_s
-                                    if _nm_s == "NIFTY 50":
+                                if _nm_s and _nm_s != "NAN" and ("NIFTY" in _nm_s or "SENSEX" in _nm_s or "BANKEX" in _nm_s or "FINNIFTY" in _nm_s or "MIDCAP" in _nm_s):
+                                    if _nm_s not in _merged:
+                                        _merged[_nm_s] = _sid_s
+                                    if _nm_s == "NIFTY 50" and "NIFTY" not in _merged:
                                         _merged["NIFTY"] = _sid_s
                             else:
                                 for _col in ["SYMBOL_NAME", "TRADING_SYMBOL", "CUSTOM_SYMBOL"]:
                                     if _col in _df_s.columns:
                                         _sym_s = str(_row[_col]).strip().upper()
-                                        if _sym_s and _sym_s != "NAN":
+                                        if _sym_s and _sym_s != "NAN" and _sym_s not in _merged:
                                             _merged[_sym_s] = _sid_s
                         except:
                             continue
@@ -551,16 +585,29 @@ def download_monthly_master_all(token):
                             continue
                     if _exps:
                         exp_map[_u] = ";".join(sorted(set(_exps))[:6])
-        # Equity rows - har stock ka ek hi row (cash row)
+        # Equity rows - har stock ka ek hi row (cash row) - V32: NSE pehle, BSE baad me, SYMBOL se dedupe - RELIANCE ka NSE 2885 hi rahega, BSE 500325 nahi
         seen = set()
+        seen_sym = set()
         if eq is not None and not eq.empty and "SECURITY_ID" in eq.columns:
+            try:
+                if "EXCH" in eq.columns:
+                    eq = eq.copy()
+                    eq["_er2"] = eq["EXCH"].astype(str).str.strip().str.upper().map(lambda x: 0 if x == "NSE" else 1)
+                    eq = eq.sort_values("_er2", kind="stable").drop(columns=["_er2"])
+            except:
+                pass
             for _, row in eq.iterrows():
                 try:
                     sid = str(row.get("SECURITY_ID", "")).strip()
                     if not sid or sid.lower() == "nan" or sid in seen:
                         continue
+                    _sym_chk = str(row.get("SYMBOL_NAME", "")).strip().upper()
+                    if _sym_chk and _sym_chk in seen_sym:
+                        continue
                     seen.add(sid)
-                    sym = str(row.get("SYMBOL_NAME", "")).strip().upper()
+                    if _sym_chk:
+                        seen_sym.add(_sym_chk)
+                    sym = _sym_chk
                     trad = str(row.get("TRADING_SYMBOL", "")).strip().upper() if "TRADING_SYMBOL" in eq.columns else ""
                     cust = str(row.get("CUSTOM_SYMBOL", "")).strip().upper() if "CUSTOM_SYMBOL" in eq.columns else ""
                     under = str(row.get("UNDERLYING_SCRIP_NAME", "")).strip().upper() if "UNDERLYING_SCRIP_NAME" in eq.columns else ""
@@ -1435,10 +1482,17 @@ def _build_symbol_lookup():
                     _disp[_s] = _s
             except:
                 pass
-        # 1) Scrip_Codes - sabse bharosemand - SYMBOL + full naam dono
+        # 1) Scrip_Codes - sabse bharosemand - SYMBOL + full naam dono - NSE pehle, BSE baad me (500325 wala bug)
         try:
             _sc, _ = read_local_csv("IND_Scrip_Codes.csv")
             if _sc is not None and not _sc.empty:
+                try:
+                    if "EXCH" in _sc.columns:
+                        _sc = _sc.copy()
+                        _sc["_er"] = _sc["EXCH"].astype(str).str.strip().str.upper().map(lambda x: 0 if x == "NSE" else 1)
+                        _sc = _sc.sort_values("_er", kind="stable").drop(columns=["_er"])
+                except:
+                    pass
                 for _, _r in _sc.iterrows():
                     try:
                         _sym2 = str(_r.get("SYMBOL_NAME", "") or _r.get("STOCK", "")).strip().upper()
@@ -2137,21 +2191,23 @@ def ind_scan_all_ind_only(progress_cb=None):
         scrip_map = ind_get_all_scrips(token) if token else dict(KNOWN_SCRIP)
         all_syms = list(_universe_216)
         quote_by_sym = {}
-        for i in range(0, len(all_syms), 5):
-            chunk = all_syms[i:i+5]
-            codes = []
-            code_to_sym = {}
-            for sym in chunk:
-                sid, _ = ind_get_scrip(sym, token, scrip_map)
-                if sid:
-                    c = f"NSE_{sid}"
-                    codes.append(c); code_to_sym[c] = sym
-            if codes:
-                qdata, _qmsg = ind_quotes_full_docs_pattern(codes, token)
-                for code, d in qdata.items():
-                    sym = code_to_sym.get(code)
-                    if sym:
-                        quote_by_sym[sym] = d
+        _closed = is_market_closed_for_scan(get_trading_day())
+        if not _closed:
+            for i in range(0, len(all_syms), 5):
+                chunk = all_syms[i:i+5]
+                codes = []
+                code_to_sym = {}
+                for sym in chunk:
+                    sid, _ = ind_get_scrip(sym, token, scrip_map)
+                    if sid:
+                        c = f"NSE_{sid}"
+                        codes.append(c); code_to_sym[c] = sym
+                if codes:
+                    qdata, _qmsg = ind_quotes_full_docs_pattern(codes, token)
+                    for code, d in qdata.items():
+                        sym = code_to_sym.get(code)
+                        if sym:
+                            quote_by_sym[sym] = d
         filled = ind_fill_for_selected(all_syms, token, scrip_map)
         for stock in all_syms:
             try:
@@ -2866,7 +2922,7 @@ def send_telegram(message):
         return False
 
 def send_top5(top5_df, expiry_str):
-    msg = f"TOP 5 - {datetime.now().strftime('%d %b %Y %H:%M')}\nExpiry: {expiry_str} | Capital: Rs 5000\n------------------------\n"
+    msg = f"TOP 5 - {datetime.now().strftime('%d %b %Y %H:%M')}\nExpiry: {expiry_str}\n------------------------\n"
     for i, (_, row) in enumerate(top5_df.iterrows(), start=1):
         stock_name = str(row.get("Stock", ""))
         ltp = safe_float(row.get("LTP", 0)); vwap = safe_float(row.get("VWAP", 0)); orb_high = safe_float(row.get("ORB High", 0)); orb_low = safe_float(row.get("ORB Low", 0)); prob = safe_float(row.get("Probability %", 0)); gap = safe_float(row.get("Gap %", 0)); vol = safe_float(row.get("Vol x", 0))
@@ -2903,7 +2959,7 @@ def check_all_strikes(chain_df, lot, ltp, direction, budget=5000):
         if prem <= 0:
             continue
         cost = round(prem * lot_f, 0); fits = cost <= budget
-        results.append({"Strike": strike, "Type": opt_type, "Premium": prem, "Lot Qty": safe_int(lot_f), "1 Lot Cost": cost, "Rs 5000 me?": "✅ HO JAYEGA" if fits else "❌ NAHI HOGA", "ATM se Door": round(abs(strike - ltp_f), 1), "Fits": fits, "OI": safe_int(r.get("CE OI", 0) if opt_type == "CE" else r.get("PE OI", 0)), "IV": safe_float(r.get("CE IV", 0) if opt_type == "CE" else r.get("PE IV", 0))})
+        results.append({"Strike": strike, "Type": opt_type, "Premium": prem, "Lot Qty": safe_int(lot_f), "1 Lot Cost": cost, "Fit?": "✅" if fits else "❌", "ATM se Door": round(abs(strike - ltp_f), 1), "Fits": fits, "OI": safe_int(r.get("CE OI", 0) if opt_type == "CE" else r.get("PE OI", 0)), "IV": safe_float(r.get("CE IV", 0) if opt_type == "CE" else r.get("PE IV", 0))})
     df = pd.DataFrame(results).sort_values("ATM se Door") if results else pd.DataFrame()
     best = df[df["Fits"] == True].sort_values("ATM se Door").iloc[0] if not df.empty and (df["Fits"] == True).any() else None
     return df, best
@@ -2984,7 +3040,7 @@ def build_trade_call(row, chain_df, expiry, news_bias):
         lot = get_lot_for_stock(stock)
         check_df, best = check_all_strikes(chain_df, lot, ltp, direction, budget=5000)
         if best is None:
-            return {"status": "NO_FIT", "stock": stock, "ltp": ltp, "prob": prob, "direction": direction, "movement_type": mtype, "reason": f"Rule pass hai, Chain bhi aayi ({len(chain_df)} strikes), par Rs 5000 me koi 1 Lot wala contract nahi mila - is stock ka premium zyada hai, doosra stock dekho.", "expiry": expiry or "", "pattern": str(row.get("Pattern", "")), "movement_detail": str(row.get("Movement Detail", "")), "session": str(row.get("Session Story", "")), "lot": lot, "total_checked": int(len(check_df)) if check_df is not None else 0}
+            return {"status": "NO_FIT", "stock": stock, "ltp": ltp, "prob": prob, "direction": direction, "movement_type": mtype, "reason": f"Fit strike nahi mila ({len(chain_df)} strikes).", "expiry": expiry or "", "pattern": str(row.get("Pattern", "")), "movement_detail": str(row.get("Movement Detail", "")), "session": str(row.get("Session Story", "")), "lot": lot, "total_checked": int(len(check_df)) if check_df is not None else 0}
         # 4) Entry / SL / Target - News + Movement se adjust
         entry = safe_float(best.get("Premium", 0))
         strike = safe_int(best.get("Strike", 0))
@@ -3152,28 +3208,27 @@ init_db()
 
 # ---------------- LOGIN ----------------
 if not st.session_state.authenticated:
-    st.title("Scanner V31 - Search + Scan Symbol Fix - Fast - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix")
-    st.info("IND Token 24 ghante me expire hota hai. Roz subah naya Token banao: indstocks.com -> Login -> /app/api-trading/access-tokens -> Claim Your API Access -> Generate -> Copy karke yahan daalo.")
-    st.write("V15 me Scan IND Historical Data se hota hai - 5minute candles se poora din dekha jata hai, sirf Open-High nahi.")
+    st.title("Scan Stock")
+    st.write("Token daalo.")
     # PIN HATA DIYA HAI - Ab sirf IND ka Secret Code hi kaafi hai. 4 ank ka Code ab kabhi nahi mangega.
     with st.form("login_form"):
-        indmoney_secret = st.text_input("INDstocks Access Token - indstocks.com se - Roz naya wala", type="password", placeholder="indstocks.com/app/api-trading/access-tokens se Copy kiya hua Token")
-        submit = st.form_submit_button("Scanner Kholo", use_container_width=True)
+        indmoney_secret = st.text_input("Token", type="password", placeholder="Token")
+        submit = st.form_submit_button("Kholo", use_container_width=True)
         if submit:
             if not indmoney_secret or len(indmoney_secret) < 10:
-                st.error("IND Token daalo - Bina Token ke Option Chain nahi aayega")
+                st.error("Token daalo")
             else:
                 ok, msg = ind_test_profile(indmoney_secret)
                 if not ok:
                     st.error(msg)
-                    st.write("Token galat hai ya expire ho gaya hai. indstocks.com pe jaake naya Token banao, phir daalo.")
+                    st.write("Token galat hai.")
                 else:
                     st.session_state.authenticated = True
                     st.session_state.indmoney_secret = indmoney_secret
                     st.session_state.indmoney_connected = True
                     st.session_state.indmoney_debug = msg
                     st.rerun()
-    if st.button("Bina Token ke Dekho - Scan sirf IND se hoga, isliye Token daalna zaroori hai"):
+    if st.button("Bina Token ke Dekho"):
         st.session_state.authenticated = True
         st.session_state.indmoney_secret = ""
         st.session_state.indmoney_connected = False
@@ -3183,7 +3238,7 @@ if not st.session_state.authenticated:
 # ---------------- TOP BAR ----------------
 top_left, top_right = st.columns([4, 1])
 with top_left:
-    st.title("Scanner V31 - Search + Scan Symbol Fix - Fast - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY | Rs 5,000 | PIN Hataya | Diary Fix | Kisi bhi Time Scan")
+    st.title("Scan Stock")
 with top_right:
     st.write("")
     if st.button("Trading Diary", use_container_width=True):
@@ -3201,17 +3256,17 @@ with top_right:
             _last_dt = datetime.strptime(_last_dl_str, "%Y-%m-%d %H:%M")
             _days_old = (ist_now() - _last_dt).days
             if _days_old >= 7:
-                _dl_old_msg = f"⚠️ Master { _days_old } Din purana ho gaya - Option ka Expiry 7 Din me badalta hai, isliye Download Data dobara dabao, nahi to Expiry purani dikhegi. Stock ka Expiry 1 Mahine me badalta hai, wo abhi thik hai."
+                _dl_old_msg = f"Data { _days_old } din purana hai."
             elif _days_old >= 1:
-                _dl_old_msg = f"Master { _days_old } Din purana hai - Option Expiry ke liye 7 Din me 1 baar Download Data dabao."
+                _dl_old_msg = f"Data { _days_old } din purana hai."
     except:
         pass
     if _dl_old_msg:
         st.warning(_dl_old_msg)
-    if st.button("📥 Download Data - Teeno File GitHub me Save Karo (Tumko Upload Nahi Karna)", use_container_width=True, key="top_download_data"):
+    if st.button("Download Data", use_container_width=True, key="top_download_data"):
         _tok_top = st.session_state.get("indmoney_secret", "")
         if not _tok_top or len(str(_tok_top)) < 10:
-            st.session_state["_master_dl_msg"] = "Pehle IND Token se Login karo - bina Token ke Master Download nahi hoga"
+            st.session_state["_master_dl_msg"] = "Pehle Token se Login karo"
         else:
             with st.spinner("Monthly Master Download ho raha hai... FNO + Equity + Index - GitHub me apne aap save ho raha hai..."):
                 _res_top, _msg_top = download_monthly_master_all(_tok_top)
@@ -3224,20 +3279,14 @@ with top_right:
     if st.session_state.get("_master_dl_msg"):
         st.caption(st.session_state["_master_dl_msg"])
     if st.session_state.get("master_dl_last_date"):
-        st.caption(f"Last Master Download: {st.session_state['master_dl_last_date']} - Agla mahine me 1 baar")
+        st.caption(f"{st.session_state['master_dl_last_date']}")
 
 if st.session_state.indmoney_connected:
-    st.success(f"IND CONNECTED - {st.session_state.get('indmoney_debug','')} - Scan IND Historical se hoga")
+    st.success("Connected")
 else:
-    st.warning("IND NOT CONNECTED - Scan sirf IND se hoga, isliye Token daal ke Login karo. Bina Token ke koi Yahoo/NSE scan nahi hoga.")
+    st.warning("Not Connected")
 
-st.sidebar.title("Dashboard")
-st.sidebar.markdown("### GitHub Secrets - Secret Jagah")
-if GITHUB_TOKEN and GITHUB_REPO:
-    st.sidebar.success(f"GitHub OK - {GITHUB_REPO}")
-else:
-    st.sidebar.warning("GitHub Token nahi hai - Diary Reboot pe udd jayegi. Diary kholo, wahan Secrets wala box dekho.")
-    st.sidebar.code('GITHUB_TOKEN = "ghp_..."\nGITHUB_REPO = "username/repo"', language="text")
+st.sidebar.title("Menu")
 if st.sidebar.button("Trading Diary Kholo"):
     st.session_state.show_diary = True; st.rerun()
 if st.sidebar.button("Refresh Data"):
@@ -3249,17 +3298,17 @@ if st.sidebar.button("Logout"):
 
 # ---------------- DIARY ----------------
 if st.session_state.show_diary:
-    st.markdown("## TRADING DIARY")
+    st.markdown("## Diary")
     # V21 - Diary ke andar bhi wahi Download Data Button - Kona me chhota sa, Diary ke paas hi
     # Mahine me 1 baar dabao - Master GitHub me apne aap save ho jayega, Expiry wahi se milegi
     col_diary_dl1, col_diary_dl2 = st.columns([3, 1])
     with col_diary_dl2:
-        if st.button("📥 Download Data", use_container_width=True, key="diary_download_data"):
+        if st.button("Download Data", use_container_width=True, key="diary_download_data"):
             _tok_d = st.session_state.get("indmoney_secret", "")
             if not _tok_d or len(str(_tok_d)) < 10:
-                st.session_state["_master_dl_msg"] = "Pehle IND Token se Login karo - bina Token ke Master Download nahi hoga"
+                st.session_state["_master_dl_msg"] = "Pehle Token se Login karo"
             else:
-                with st.spinner("Monthly Master Download ho raha hai... GitHub me apne aap save ho raha hai..."):
+                with st.spinner("Download ho raha hai..."):
                     _res_d, _msg_d = download_monthly_master_all(_tok_d)
                     _lines_d = []
                     for _fn, _b, _df, _ok, _m in _res_d:
@@ -3268,7 +3317,7 @@ if st.session_state.show_diary:
                     st.session_state["master_dl_last_date"] = ist_now().strftime("%Y-%m-%d %H:%M")
             st.rerun()
     with col_diary_dl1:
-        st.caption("Mahine me 1 baar Download Data dabao - Exchange, Segment, Security ID, Expiry - sab Master me aa jayega, GitHub me apne aap save hoga. Roz sirf Latest Price / Candle hi search karna padega.")
+        st.caption("")
     if st.session_state.get("_master_dl_msg"):
         st.info(st.session_state["_master_dl_msg"])
     if st.session_state.get("master_dl_last_date"):
@@ -3277,10 +3326,10 @@ if st.session_state.show_diary:
         st.success(st.session_state["_diary_last_msg"])
     # GitHub Secrets ka status - yahi secret jagah hai
     if GITHUB_TOKEN and GITHUB_REPO:
-        st.success(f"GitHub Connected - Repo: {GITHUB_REPO} - Diary GitHub me bhi save hogi, Reboot pe nahi udegi")
+        st.success("GitHub Connected")
     else:
-        st.warning("GitHub Token Secrets me nahi hai - Diary abhi sirf is App me save hogi, Reboot pe udd sakti hai. Neeche GitHub Secrets wala box dekho, usme daal do to hamesha ke liye save hogi.")
-        with st.expander("GitHub Secrets - Kya chahiye, kahan daalna hai, ye dekho"):
+        st.warning("GitHub nahi hai")
+        with st.expander("Secrets"):
             st.code("""Streamlit Cloud -> App -> (3 dot) Manage app -> Settings -> Secrets me ye daalo:
 
 TELEGRAM_BOT_TOKEN = "[TUMHARA-BOT-TOKEN-SIRF-SECRETS-ME]"
@@ -3333,86 +3382,44 @@ GITHUB_REPO = "tumhara-username/tumhara-repo-naam"
 # Naam jo bola hai wahi rakha hai: IND_Master_Equity.csv (aur IND_Master_FNO.csv) - Isko GitHub repo me app.py ke saath rakho.
 # App ab Download nahi karega, GitHub wali File se hi Sahi Naam + Secret Code lega. Usme sab stock ka likha hua hoga.
 # Agar GitHub pe file abhi nahi hai to neeche Upload se bhi de sakte ho - wo bhi Download nahi hai, Upload hai.
-st.markdown("### IND Master - Security ID se Search - IND_master_index wali File se")
-st.write("File ka naam: **IND_master_index.csv** + **IND_Master_FNO.csv** + **IND_Master_Equity.csv** - Ye 3 File Trading Diary ke paas wale **Download Data** Button se Mahine me 1 baar Download ho ke GitHub me apne aap save ho jayengi. App roz Download nahi karega, Exchange / Segment wala request bhi roz nahi bhejega, **roz sirf Security ID se search karega** - jo is File me likha hoga, wahi ID use hoga. Expiry bhi isi Master se milegi, baar-baar Expiry search nahi karni padegi. Roz sirf Latest Price / Candle jo move karega, wo hi Daily search karna padega.")
-st.write("Tumko Upload nahi karna hai - Tum daloge to purana ho jayega. Download Data dabao, Streamlit ke paas jo GitHub ka Security Code hai, usi se app khud Download karke GitHub me save karega. Uske baad sab Data usi File se padha jayega, naam se Search nahi hoga, sirf Code se Search hoga, isliye Error aayega hi nahi.")
-st.write("Expiry: Stock ka Expiry 1 Mahine me badalta hai, Option ka Expiry 7 Din me badalta hai - isliye 7 Din me 1 baar Download Data dabao, to Expiry hamesha fresh rahegi.")
-st.write("Photo me jo 3rd file dikhi hai - IND Master Index - usme EXCH, SEGMENT, SECURITY_ID hai. SEGMENT wale column me Index ka naam hai - jaise NIFTY 50 = 40000001, NIFTY IT = 40000004. Stock wali File (IND_Master_Equity / FNO) bhi isi naam se rakhoge to wo bhi isi se milegi. RELIANCE ka Security ID = 2885, wahi se aayega - ISIN (INE002A01018) se mat milana, ISIN alag hai, Security ID alag hai.")
-# GitHub File ka haal dikhao
+# Master file chupchaap load karo - screen pe kuch mat likho
 try:
     _gh_df, _gh_msg = ind_load_master_from_github_file()
     if _gh_df is not None and not _gh_df.empty:
-        st.success(f"✅ Master CSV GitHub File se mil gaya - {_gh_msg} - Isi se Sahi Naam + Code liya jayega.")
         st.session_state["master_equity_df"] = _gh_df
         _master_done = True
     else:
-        st.warning(f"⚠️ GitHub pe IND_master_index.csv abhi nahi mila - {_gh_msg}. Tab tak KNOWN_SCRIP se kaam chalega, fail nahi hoga. GitHub pe file daal do, agle Reboot se wahi file use hogi.")
         _master_done = False
-except Exception as e:
-    st.warning(f"Master File check me error - {e}")
+except Exception:
     _master_done = False
-# V22 - Upload hata diya - Tumne bola hum nahi dalenge, hum dalenge to purana ho jayega, 23 tarikh ko expire ho jayega.
-# Isliye tumko Upload nahi karna hai. Sirf upar wala Download Data dabana hai.
-# Streamlit ke paas GitHub ka Security Code (GITHUB_TOKEN + GITHUB_REPO) hai hi, usi se app khud Download karke GitHub me save karega.
-# Tumko kuch nahi dalna hai - Download Data dabao, teeno File GitHub me apne aap save ho jayengi.
-st.info("📌 Tumko Upload nahi karna hai - Tum daloge to purana ho jayega, 23 tarikh ko expire ho jayega. Sirf upar / Diary ke paas wala **Download Data** dabao - Streamlit ke paas jo GitHub ka Security Code hai, usi se app khud teeno File Download karke GitHub me save karega. Uske baad sab Data usi File se padha jayega.")
-if _master_done:
-    # V20 - Ek example dikhao - RELIANCE ka Security ID File se kya aaya, taaki pata chale Security ID se hi khoj ho rahi hai
-    try:
-        _mp = ind_get_all_scrips(st.session_state.get("indmoney_secret", ""))
-        _rel_id = _mp.get("RELIANCE", "")
-        _nif_id = _mp.get("NIFTY 50", _mp.get("NIFTY", ""))
-        if _rel_id:
-            st.success(f"✅ Security ID se Search ON hai - RELIANCE ka Security ID File se aaya: {_rel_id} - Isi ID se ab Historical + Option Chain khoja jayega, Exchange/Segment wala request nahi jayega. NIFTY 50 ka ID: {_nif_id if _nif_id else 'Index File me dekho'}")
-    except:
-        pass
-    with st.expander("Hamare 216 Stocks ka IND me Sahi Naam + Secret Code + Lot + Expiry - GitHub wali File se - Yahi Table Dekh Ke Naam Likho", expanded=False):
-        try:
-            _mt = ind_build_master_table(st.session_state.get("master_equity_df", pd.DataFrame()))
-            if not _mt.empty:
-                _prob = _mt[_mt["Status"].str.contains("ALAG|Nahi Mila", na=False)]
-                _ok = _mt[_mt["Status"].str.contains("SAME", na=False)]
-                st.write(f"Total: {len(_mt)} | ✅ Same Naam: {len(_ok)} | ⚠️ Naam Alag / ❌ Nahi Mila: {len(_prob)} - Inhi ki wajah se pehle fail hota tha")
-                if not _prob.empty:
-                    st.write("Pehle ye wale dekho - Inka IND wala naam alag hai:")
-                    st.dataframe(_prob, use_container_width=True, hide_index=True)
-                st.write("Sab 216 ka poora Master Table (GitHub File se - Master FNO DISTINCT UNDERLYING):")
-                st.dataframe(_mt, use_container_width=True, hide_index=True)
-            else:
-                st.write("Master Table khali hai - GitHub pe IND_master_index.csv daalo")
-        except Exception as e:
-            st.write(f"Master Table me error - {e}")
-    _logs5 = st.session_state.get("ind_5x5_logs", [])
-    if _logs5:
-        with st.expander("IND 5-5 + 1-1 Retry ka Log", expanded=False):
-            for _l in _logs5:
-                st.write(_l)
 st.divider()
 
 # ---------------- V24 - SINGLE STOCK SEARCH - RELIANCE ya RIL likho, Suggestion dega, Sirf IND se Check karega - NSE_ + SECURITY_ID se ----------------
 # User ka naya Option: Hum jo stock search karein, stock ka naam likhein - jaise RELIANCE ya RIL likhein, to Suggestion de de RELIANCE ka, phir usko search karke bataye ki kitne Criteria pe fit ho raha hai aur 100 me se kitne ank mile.
 # Ye 5 ka example nahi hai - ye koi bhi 1 stock ke liye hai, jab tum chaaho tab check karo, poora Scan kiye bina.
-st.markdown("### 🔍 Ek Stock Search Karo - Sirf IND Se - GitHub CSV File se Code Nikal Ke NSE_ + Code Se")
-st.write("Ek stock likho - Symbol ya poora naam.")
-_single_input = st.text_input("Stock ka Naam likho - jaise RELIANCE, RIL, HDFC, BHEL, TATA", placeholder="RIL likho to RELIANCE milega", key="single_stock_input")
+st.markdown("### Search")
+st.write("")
+_single_input = st.text_input("Stock", placeholder="RELIANCE", key="single_stock_input")
 _single_resolved = None
 _single_sugg = []
 if _single_input:
     _single_resolved, _single_sugg = resolve_stock_name(_single_input)
     if _single_resolved:
-        st.success(f"Suggestion: **{_single_resolved}** - Yahi stock check hoga. Agar ye sahi nahi hai to neeche wale Dropdown se doosra chuno.")
+        st.success(f"{_single_resolved}")
     elif _single_sugg:
-        st.info(f"Kai stock mile - Neeche Dropdown se chuno: {', '.join(_single_sugg)}")
-        _single_resolved = st.selectbox("Suggestion me se chuno", _single_sugg, key="single_stock_select")
+        st.info("Chuno:")
+        _single_resolved = st.selectbox("Chuno", _single_sugg, key="single_stock_select")
     else:
-        st.warning(f"'{_single_input}' se koi stock nahi mila - Sahi naam likho jaise RELIANCE, BHEL, ya thoda chhota likho jaise REL, TATA")
+        st.warning("Nahi mila")
         # Dropdown me sab dikha do taaki wahan se chun sake
-        _single_opts_216 = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
-    _single_resolved = st.selectbox(f"Ya yahan se chuno - saare {len(_single_opts_216)} stocks (216 Universe - Master FNO se)", _single_opts_216, key="single_stock_all_select")
+        _raw_opts = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
+        _single_opts_216, _ = normalize_universe_to_symbols(_raw_opts, pd.DataFrame({"STOCK": _raw_opts}))
+    _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216)} stocks", _single_opts_216, key="single_stock_all_select")
 else:
     # Khali hai to bhi Dropdown de do - wahan se bhi chun sakte ho
-    _single_opts_216b = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
-    _single_resolved = st.selectbox(f"Ya yahan se stock chuno - {len(_single_opts_216b)} stocks", [""] + _single_opts_216b, key="single_stock_dropdown_empty")
+    _raw_opts_b = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
+    _single_opts_216b, _ = normalize_universe_to_symbols(_raw_opts_b, pd.DataFrame({"STOCK": _raw_opts_b}))
+    _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216b)} stocks", [""] + _single_opts_216b, key="single_stock_dropdown_empty")
     if _single_resolved == "":
         _single_resolved = None
 if _single_resolved:
@@ -3422,13 +3429,13 @@ if _single_resolved:
         _map_single = ind_get_all_scrips(st.session_state.get("indmoney_secret", ""))
         _code_single = _map_single.get(_single_resolved, _map_single.get(_single_resolved.upper(), ""))
         if _code_single:
-            st.success(f"✅ {_single_resolved} ka Code mil gaya - **Security ID: {_code_single}** - Ab iska Search naam se nahi, sirf isi Code se hoga, isliye Error aayega hi nahi. Code pehle se hi Master File me tha.")
+            st.success(f"{_single_resolved} - {_code_single}")
         else:
-            st.warning(f"{_single_resolved} ka Code Master File me nahi mila - Pehle upar wala Download Data dabao, phir Code aa jayega. Download Data se Code GitHub wali File se aayega.")
+            st.warning("Code nahi mila - Download Data dabao")
     except Exception as e:
         st.write(f"Code check me error - {e}")
-    if st.button(f"{_single_resolved} ko Sirf IND Se Check Karo - NSE_ + Code Se - 100 me se Score", use_container_width=True, key="single_check_btn"):
-        with st.spinner(f"{_single_resolved} ko sirf IND se check kar rahe hain - Docs wala pattern - NSE_ + SECURITY_ID se..."):
+    if st.button(f"{_single_resolved} - Check", use_container_width=True, key="single_check_btn"):
+        with st.spinner("Check ho raha hai..."):
             # V24 - SIRF IND SE - Docs wala exact pattern, jo photo me bheja hai:
             #   headers = {'Authorization': access_token}
             #   params = {'scrip-codes': 'NSE_2885,NSE_11536'}
@@ -3495,8 +3502,8 @@ if _single_resolved:
 if st.session_state.get("single_result"):
     _sr = st.session_state["single_result"]
     _stk = _sr.get("stock", "")
-    st.markdown(f"### {_stk} ka Result - Sirf IND Se - Ek Hi Sahi Result")
-    st.write(f"**IND:** {_sr.get('ind_msg','')} | **Scrip-Code:** {_sr.get('scrip_code','')} | **SECURITY_ID (CSV me):** {_sr.get('security_id','')} | **Docs Pattern:** scrip-codes = NSE_ + SECURITY_ID")
+    st.markdown(f"### {_stk}")
+    st.write(f"{_sr.get('scrip_code','')} | {_sr.get('security_id','')}")
     # SIRF IND KA TABLE - Teenon ka nahi, ek hi sahi wala - Docs wala quotes/full se LTP + Candle se baaki
     _iA = _sr.get("ind_ana") or {}; _iQ = _sr.get("ind_quote") or {}
     _ind_rows = [
@@ -3513,15 +3520,15 @@ if st.session_state.get("single_result"):
     _best = _sr.get("best_ana")
     if _best is not None and "error" not in _best:
         _break_df, _total = calc_probability_breakdown(_best)
-        st.markdown(f"### {_stk} ka Score - 100 me se **{_total}** ank mile - Kaise bana, ye dekho")
+        st.markdown(f"### {_stk} - {_total}/100")
         st.dataframe(_break_df, use_container_width=True, hide_index=True)
-        st.write(f"**Final Probability: {_total}/100** - Gap + VWAP + ORB + Volume + Movement + Trending + Volatility - Fake/Choppy/Sideways kaat ke. Pehle sirf 70/60 likha aata tha, ab poora hisab dikh raha hai ki 70 kaise bana.")
+        st.write(f"{_total}/100")
         # Pass count bhi
         _pass_n = int(sum([1 for _, r in _break_df.iterrows() if r["Pass?"] == "✅ PASS" and r["Max"] > 0 and r["Criteria"].startswith(("1.","2.","3.","4."))]))
-        st.write(f"**4 Main Criteria me se {_pass_n}/4 Pass** - Gap, VWAP, ORB, Volume - 4 me se 4 pass ho to Fulfill maana jata hai, 3 pass ho to bhi dekh sakte ho.")
+        st.write(f"{_pass_n}/4 Pass")
         st.write(f"**Movement:** {_best.get('Movement Type','')} - {_best.get('Movement Detail','')} | **Session:** {_best.get('Session Story','')} | **Fake?** {'HAAN - TRAP' if _best.get('Fake Breakout') else 'NAHI'}")
     else:
-        st.warning("IND se poora data nahi aaya, isliye 100 wala Score nahi bana - Upar wali IND wali line me dekho kahan fail hua - Scrip-Code GitHub me hai ya nahi, ye check karo.")
+        st.warning("Data nahi aaya")
     # V23 - Single ka Option Chain - sirf INDmoney se - NSE se nahi mangte
     _ind_ch_s = _sr.get("ind_chain", pd.DataFrame())
     if _ind_ch_s is not None and not _ind_ch_s.empty:
@@ -3548,13 +3555,13 @@ if st.session_state.get("single_result"):
             _s_row["Fake?"] = "HAAN - TRAP" if bool(_s_ana.get("Fake Breakout", False)) else "NAHI"
             # News bias Single ke liye - abhi ka news table neeche hai, isliye yahan NEUTRAL rakhenge, SCAN wala FINAL CALL news se adjust hota hai
             _s_call = build_trade_call(_s_row, _ind_ch_s, _sr.get("expiry", ""), "NEUTRAL")
-            st.markdown(f"### 🎯 {_stk} ka FINAL CALL - Single Search")
+            st.markdown(f"### {_stk}")
             if _s_call.get("status") == "TRADE":
                 st.success(f"BUY KARO: {_s_call['stock']} {_s_call['strike']} {_s_call['opt_type']} @ Rs {_s_call['entry']} - Expiry: {_s_call['expiry']} - 1 Lot Cost Rs {_s_call['cost']:.0f} (Lot { _s_call['lot']})")
-                st.write(f"**BUY:** Rs {_s_call['entry']} pe BUY | **SELL (Target):** Rs {_s_call['target']} pe SELL | **STOP LOSS:** Rs {_s_call['sl']} pe nikal jao")
+                st.write(f"BUY: Rs {_s_call['entry']} | SELL: Rs {_s_call['target']} | SL: Rs {_s_call['sl']}")
                 st.write(f"Max Profit: Rs {_s_call['max_profit']:.0f} | Max Loss: Rs {_s_call['max_loss']:.0f} | Prob: {_s_call['prob']:.0f}/100 | Direction: {_s_call['direction']} | LTP Rs {_s_call['ltp']:.1f}")
                 st.write(f"Rule: {_s_call.get('rule_line','')} | Movement: {_s_call['movement_type']} | Adjust: {_s_call.get('adjust_note','')}")
-                st.write("Info only - Auto trade nahi hai, tum khud manual loge.")
+                st.write("")
                 _s_sugg = {"date": datetime.now().strftime("%Y-%m-%d"), "time": datetime.now().strftime("%H:%M:%S"), "symbol": _s_call['stock'], "strike": _s_call['strike'], "opt_type": _s_call['opt_type'], "entry": float(_s_call['entry']), "sl": float(_s_call['sl']), "target": float(_s_call['target']), "qty_lots": 1, "qty_total": int(_s_call['lot']), "capital_used": float(_s_call['cost']), "risk": float(_s_call['max_loss']), "status": "OPEN", "reason": f"Single Search - Prob {_s_call['prob']:.0f} - {_s_call['movement_type']}", "conditions": _s_call.get('rule_line','')}
                 if st.button(f"{_stk} {_s_call['strike']} {_s_call['opt_type']} ka Notification Bhejo", use_container_width=True, key="single_call_notify"):
                     _ok_s = send_strike(_s_call['stock'], _s_call['strike'], _s_call['opt_type'], _s_call['entry'], _s_call['sl'], _s_call['target'], _s_call['cost'], _s_call['lot'], _s_call['expiry'], str(_s_call['movement_type']))
@@ -3573,13 +3580,13 @@ st.divider()
 try:
     _td = get_trading_day()
     _s, _e = get_scan_window(_td)
-    st.info(f"Time: {ist_now().strftime('%H:%M:%S')} | Trading Day: {_td} | Window: {_s.strftime('%H:%M')} - {_e.strftime('%H:%M')}")
+    st.info(f"{ist_now().strftime('%H:%M')} | {_td}")
 except Exception as e:
     pass
 
 # Manual News wala stock - jaise BHEL me 2.5 lakh crore ka deal hua to BHEL bhag sakta hai, wo Yahoo Top 5 me nahi bhi ho to bhi hum usko Step 2 me lenge
-st.markdown("### News wala Stock Add Karo - Agar kisi stock me badi khabar aayi hai to yahan likho")
-manual_input = st.text_input("News wala Stock - jaise BHEL, SUZLON - comma se alag karke likho (khali bhi chhod sakte ho)", placeholder="BHEL, SUZLON", key="manual_news_input")
+st.markdown("### News")
+manual_input = st.text_input("News Stock", placeholder="BHEL, SUZLON", key="manual_news_input")
 manual_list = []
 if manual_input:
     for _x in manual_input.split(","):
@@ -3632,13 +3639,24 @@ with st.expander("History Cache", expanded=False):
     except Exception as e:
         st.write(f"History Cache UI me Error - {e}")
 
-if st.button("SCAN NOW - SIRF IND SE - 216 Stocks - NSE_ + Code Se", use_container_width=True):
+if st.button("Scan", use_container_width=True):
     # V24 - SIRF IND SE SCAN - Yahoo / NSE band. Docs wala pattern hi sab jagah.
     # Pehle GitHub wali IND_Scrip_Codes.csv se Scrip-Code turant mil jayega (Download Data se jama hua).
     # Phir live data sirf IND se: quotes/full (NSE_2885) + historical/5minute (NSE_2885) + option-chain (underlying-scrip=2885)
     # Jo data badalne wala nahi hai (Scrip-Code + Expiry) wo GitHub se, jo badalne wala hai (LTP/Candle/Chain) wo live IND se.
-    with st.spinner("Sirf IND se scan ho raha hai - 216 stocks - Pehle GitHub se Scrip-Code, phir live LTP + Candle IND se - 5-5 batch me (44 batch, 2-3 min lag sakta hai)..."):
-        df_step1, debug1 = ind_scan_all_ind_only()
+    with st.spinner("Scan ho raha hai..."):
+        # V32 - Dobara Scan dabaya aur market band hai aur isi din ka scan pehle se hai to dobara IND se mat mango - wahi result turant dikhao. Pehle har baar poora scan dobara hota tha, isliye har baar utna hi time lagta tha.
+        _td_now = get_trading_day()
+        _reuse = False
+        _prev_df = st.session_state.get("scan_df", None)
+        _prev_day = st.session_state.get("scan_trading_day", "")
+        if _prev_df is not None and not _prev_df.empty and str(_prev_day) == str(_td_now) and is_market_closed_for_scan(_td_now):
+            df_step1 = _prev_df
+            debug1 = st.session_state.get("step1_debug", {})
+            _reuse = True
+        else:
+            df_step1, debug1 = ind_scan_all_ind_only()
+            st.session_state.scan_trading_day = str(_td_now)
         st.session_state.scan_df = df_step1
         st.session_state.step1_debug = debug1
         st.session_state.scan_time = datetime.now().strftime("%H:%M:%S")
@@ -3656,7 +3674,7 @@ if st.button("SCAN NOW - SIRF IND SE - 216 Stocks - NSE_ + Code Se", use_contain
         if not selected and manual_list:
             selected = manual_list[:]
         st.session_state.selected_stocks = selected
-        st.session_state.scan_source = f"IND-ONLY: IND {debug1.get('ind_ok',0)}/{debug1.get('ind_total',0)} OK - NSE_ + SECURITY_ID se - Docs wala pattern"
+        st.session_state.scan_source = f"{debug1.get('ind_ok',0)}/{debug1.get('ind_total',0)}" if not _reuse else "Cache se"
         # Option Chain sirf Selected ke liye, sirf IND se
         token = st.session_state.get("indmoney_secret", "")
         step3_results = {}
@@ -3809,15 +3827,15 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             st.session_state["top_call"] = _final_call
     except Exception as _e_fc:
         _final_call = {"status": "NO_TRADE", "stock": "", "reason": f"FINAL CALL me error - {_e_fc}", "expiry": ""}
-    st.markdown("### 🏆 FINAL CALL - Top Trader Rule se Chuna Gaya 1 Stock - Yahi Asli Kaam Hai")
-    st.write(f"News Bias: {_news_bias_top} - Isse SL/Target adjust hua hai. Info only - Auto trade nahi hai, tum khud manual loge.")
+    st.markdown("### Best Stock")
+    st.write(f"News: {_news_bias_top}")
     if _final_call and _final_call.get("status") == "TRADE":
         st.success(f"BUY KARO: {_final_call['stock']} {_final_call['strike']} {_final_call['opt_type']} @ Rs {_final_call['entry']} - Expiry: {_final_call['expiry']} - 1 Lot Cost Rs {_final_call['cost']:.0f} (Lot {_final_call['lot']})")
         st.write(f"**BUY:** Rs {_final_call['entry']} pe BUY karo | **SELL (Target):** Rs {_final_call['target']} pe SELL karo | **STOP LOSS:** Rs {_final_call['sl']} pe nikal jao - SL se neeche mat ruko")
         st.write(f"Max Profit: Rs {_final_call['max_profit']:.0f} | Max Loss: Rs {_final_call['max_loss']:.0f} | Prob: {_final_call['prob']:.0f}/100 | Direction: {_final_call['direction']} | Stock LTP Rs {_final_call['ltp']:.1f}")
-        st.write(f"**Kyu chuna - Rule:** {_final_call.get('rule_line','')}")
+        st.write(f"{_final_call.get('rule_line','')}")
         st.write(f"Movement: {_final_call['movement_type']} - {_final_call.get('movement_detail','')} | Session: {_final_call.get('session','')}")
-        st.write(f"Adjust: {_final_call.get('adjust_note','')} | Chain me Rs 5000 me fit: {_final_call.get('fits_count',0)}/{_final_call.get('total_checked',0)} strikes")
+        st.write(f"{_final_call.get('adjust_note','')}")
         _fc_sugg = {"date": datetime.now().strftime("%Y-%m-%d"), "time": datetime.now().strftime("%H:%M:%S"), "symbol": _final_call['stock'], "strike": _final_call['strike'], "opt_type": _final_call['opt_type'], "entry": float(_final_call['entry']), "sl": float(_final_call['sl']), "target": float(_final_call['target']), "qty_lots": 1, "qty_total": int(_final_call['lot']), "capital_used": float(_final_call['cost']), "risk": float(_final_call['max_loss']), "status": "OPEN", "reason": f"FINAL CALL - Prob {_final_call['prob']:.0f} - {_final_call['movement_type']}", "conditions": _final_call.get('rule_line','')}
         _c1, _c2 = st.columns(2)
         with _c1:
@@ -3864,7 +3882,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
     _s2 = st.session_state.get("step2_results", {})
     _s3 = st.session_state.get("step3_results", {})
     _need = st.session_state.get("need_ind", [])
-    with st.expander("IND-ONLY DEBUG - GitHub se Scrip-Code + Live IND se LTP/Candle/Chain - Ye dekho"):
+    with st.expander("Debug"):
         st.write(f"IND Scan: OK {_dbg1.get('ind_ok',0)} / {_dbg1.get('ind_total',216)} | Fail: {len(_dbg1.get('ind_fail',[]))} - { _dbg1.get('ind_fail',[])[:10]}")
         st.write(f"Universe: {_dbg1.get('universe_msg','')} | Total Checked: {_dbg1.get('ind_total',0)}")
         st.write(f"Selected (Top 15 + Prob>=50 + Manual News wale - 5 sirf example tha): {_sel}")
@@ -3876,12 +3894,12 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         st.write("FAIL KYU HUA THA (pehle): 1 galat Scrip-Code se poora 5-5 batch 400 de deta tha. Ab fail wale batch ke 5 ko 1-1 karke retry karte hain, to 4 sahi wale bach jate hain.")
     _logs5b = st.session_state.get("ind_5x5_logs", [])
     if _logs5b:
-        st.write("IND 5-5 + 1-1 Retry Log:")
+        st.write("Log:")
         for _ll in _logs5b:
             st.write(f"  - {_ll}")
     # V19 - Top 5 ka 100 me se Score kaise bana - yehi gayab ho gaya tha
     if not df_scan.empty:
-        with st.expander("Top 5 ka 100 me se Score kaise bana - Gap 15 + VWAP 15 + ORB 20 + Volume 15 + Movement 15 + Trending 10 + Volatility 10 - Fake/Choppy kaat ke", expanded=False):
+        with st.expander("Score", expanded=False):
             for _idx in range(min(5, len(df_scan))):
                 _row = df_scan.iloc[_idx]
                 _stk = _row.get("Stock", "")
@@ -3898,20 +3916,20 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
                     {"Criteria": "KATOTI Fake/Choppy", "Value": f"Fake: {_row.get('Fake?','')} | Movement: {_row.get('Movement Type','')}", "Pass?": "❌ KATA" if "TRAP" in str(_row.get("Fake?","")) else "✅ SAHI", "Ank": "-30 agar Fake hai", "Max": 0},
                 ]
                 st.dataframe(pd.DataFrame(_brows), use_container_width=True, hide_index=True)
-                st.write(f"Final: {_prob}/100 - Poora 100 wala hisab Single Search me us stock ko alag se check karne pe bhi dikhega.")
+                st.write(f"Final: {_prob}/100")
 
     _cmap = st.session_state.get("chain_map", {})
     # IND-ONLY TABLE - Data jama wala hissa - ab band (collapsed) expander me, taaki FINAL CALL ke upar na aaye
-    with st.expander("Data Jama - IND Fill + Chain Count - Sirf check ke liye, trade isse nahi banta", expanded=False):
+    with st.expander("Data", expanded=False):
         if _s3:
-            st.markdown("### IND Fill - Selected ka - Sirf IND Se - Scrip-Code GitHub se, LTP/Candle Live IND se")
+            st.markdown("### Detail")
             _rows3 = []
             for _k, _v in _s3.items():
                 _rows3.append({"Stock": _k, "IND Result": _v.get("reason",""), "IND OK?": "✅ IND SE MILA" if _v.get("ok") else "❌ IND FAIL - Scrip-Code GitHub me check karo"})
             st.dataframe(pd.DataFrame(_rows3), use_container_width=True, hide_index=True)
         _cmap = st.session_state.get("chain_map", {})
         if _cmap:
-            st.markdown("### Option Chain Count - Sirf IND Se - underlying-scrip = SECURITY_ID (bina prefix)")
+            st.markdown("### Chain")
             _rowsC = []
             for _k, _v in _cmap.items():
                 _ch = _v.get("chain", pd.DataFrame())
@@ -3919,10 +3937,10 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             st.dataframe(pd.DataFrame(_rowsC), use_container_width=True, hide_index=True)
     if st.session_state.get("auto_sent"):
         st.success("Chala gaya ✅")
-    st.markdown("### 1. PICHHLA MOVE - Nifty / Bank Nifty / Sensex / Bankex")
+    st.markdown("### Index")
     if indices_df is not None and not indices_df.empty:
         st.dataframe(indices_df, use_container_width=True, hide_index=True)
-    st.markdown("### 2. GLOBAL NEWS - Isse Probability upar-neeche hogi")
+    st.markdown("### News")
     if news_df is not None and not news_df.empty:
         st.dataframe(news_df, use_container_width=True, hide_index=True)
         neg_count = len(news_df[news_df["Impact"] == "NEGATIVE"]); pos_count = len(news_df[news_df["Impact"] == "POSITIVE"])
@@ -3935,7 +3953,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
     else:
         news_bias = "NEUTRAL"
     st.write(f"News Bias: {news_bias} - Negative zyada hai to CE ka Target kam, SL tight rakhenge. Positive hai to CE ka Target bada.")
-    st.markdown("### 3. TOP 5 STOCKS - Full Day Movement ke saath")
+    st.markdown("### Top 5")
     top5 = df_scan.head(5)
     st.dataframe(top5[_safe_cols(top5, ["Stock", "LTP", "Gap %", "Direction", "Pattern", "Movement Type", "Probability %", "Movement", "Movement Started?", "Pass"])], use_container_width=True, hide_index=True)
     top1 = df_scan.iloc[0]; top1_stock = str(top1.get("Stock", "")); top1_prob = safe_float(top1.get("Probability %", 0)); top1_ltp = safe_float(top1.get("LTP", 0))
@@ -3948,10 +3966,10 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             st.success("Chala gaya ✅")
         else:
             st.error("Nahi gaya ❌")
-    st.markdown("### 4. FULL DAY MOVEMENT - Kaunsa Sideways hai, Kaunsa Bhag Raha hai, Kaunsa Volatile hai")
+    st.markdown("### Movement")
     st.write("Sideways = Option mat lo, wait karo. Bhag Raha = Option le sakte ho. Volatile/Choppy = Premium kha jayega, mat lo. Fake = Trap tha.")
     st.dataframe(df_scan[_safe_cols(df_scan, ["Stock", "LTP", "Day Range %", "Net Move %", "Range vs ATR", "Movement Type", "Session Story", "VWAP Cross", "Wick", "Reversal", "Fake?", "Probability %"])], use_container_width=True, hide_index=True)
-    st.markdown("### 5. PURA MARKET - 5 Conditions Pass / Fail")
+    st.markdown("### Market")
     # V27 - PURA MARKET me VWAP float nahi, ✅/❌ dikhana hai - isliye display copy me VWAP = VWAP_OK kar do, original df_scan ka VWAP float bacha rahega
     _disp_pura = df_scan.copy()
     try:
@@ -3960,7 +3978,7 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
     except:
         pass
     st.dataframe(_disp_pura[_safe_cols(_disp_pura, ["Stock", "LTP", "Gap %", "Direction", "Pattern", "Movement Type", "Probability %", "Gap", "VWAP", "ORB", "Volume", "Volatility OK", "Movement Started?", "Pass"])], use_container_width=True, hide_index=True)
-    st.markdown("### 6. OPTION CHAIN - INDstocks se hi aayega, NSE Website se NAHI, Yahoo se NAHI")
+    st.markdown("### Chain")
     sel_stock = st.selectbox("Stock Chuno - Jiska Option Chain dekhna hai", df_scan["Stock"].tolist(), index=0)
     if sel_stock:
         row = df_scan[df_scan["Stock"] == sel_stock].iloc[0]
@@ -4031,13 +4049,13 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             except:
                 pass
             check_df, best = check_all_strikes(chain_df, lot, sel_ltp, row.get("Direction", ""), budget=5000)
-            st.markdown(f"#### TOTAL STRIKE CHECK - Kaunsa 1 Lot Rs 5000 me Ho Jayega? (Lot: {lot}, Expiry: {expiry_shown})")
+            st.markdown(f"#### Strikes (Lot: {lot})")
             if not check_df.empty:
                 st.dataframe(check_df, use_container_width=True, hide_index=True)
                 fits_df = check_df[check_df["Fits"] == True]
-                st.write(f"Total Checked: {len(check_df)} | 5000 me Ho Jayenge: {len(fits_df)}")
+                st.write(f"Total: {len(check_df)} | Fit: {len(fits_df)}")
                 if not fits_df.empty:
-                    st.dataframe(fits_df[["Strike", "Type", "Premium", "1 Lot Cost", "Rs 5000 me?", "OI", "IV"]], use_container_width=True, hide_index=True)
+                    st.dataframe(fits_df[["Strike", "Type", "Premium", "1 Lot Cost", "Fit?", "OI", "IV"]], use_container_width=True, hide_index=True)
             if best is not None:
                 # News + Movement ke hisab se SL/Target adjust karo - Choppy me Target chhota, SL tight
                 if "CHOPPY" in str(row.get("Movement Type", "")) or "VOLATILE" in str(row.get("Movement Type", "")):
@@ -4075,10 +4093,9 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
                 st.error(f"{sel_stock} me Rs 5000 me koi 1 Lot wala contract nahi mila.")
         elif chain_key in st.session_state and (st.session_state[chain_key] is None or st.session_state[chain_key].empty):
             st.error(f"❌ Option Chain nahi aaya - Wajah: {st.session_state.get(f'chain_source_{sel_stock}','')}")
-            st.write(f"Expiry try ki thi: {st.session_state.get(f'expiry_{sel_stock}','')} | Scrip try kiya tha: {st.session_state.get(f'scrip_{sel_stock}','')}")
-            st.write("Sabse common wajah: Token 24 ghante me expire ho gaya hai. indstocks.com pe jaake naya Token banao, Logout karke dobara Login karo.")
+            st.write("")
+            st.write("Token check karo")
         else:
-            st.info(f"{sel_stock} ka Option Chain Mango dabao.")
+            st.info("Chain Mango dabao")
 else:
-    st.info("SCAN NOW dabao.")
-
+    pass
