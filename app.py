@@ -1,4 +1,4 @@
-# app.py - V31 - Scanner - IND-Only
+# app.py - V42 - Scanner
 # ============================================================================================
 import streamlit as st
 import pandas as pd
@@ -52,6 +52,25 @@ except:
 # Isliye Download Data ke baad wala fresh data Session me rakhte hain - taaki usi run me naya data use ho, purani local file na use ho jaye.
 APP_DIR = Path(__file__).resolve().parent  # app.py jis folder me hai, wahi folder - bagal wali file yahin hai
 MASTER_FOLDER = "data"  # V33 - GitHub me sab master data ek hi folder me - bahar root me nahi. Diary alag hai, wo trades_diary me hi rahegi.
+
+APP_VERSION = 42  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
+def data_freshness_line():
+    # Data taaza hai ya nahi - bas yehi dikhayenge, kahan se aaya ye nahi.
+    # Taaza = Aaj ka Scan isi session me ho gaya, ya Universe file aaj ki hai. Nahi to - Download Data dabao.
+    try:
+        import streamlit as _st
+        _sdf = _st.session_state.get("scan_df", None)
+        if _sdf is not None and not _sdf.empty:
+            return "Taaza - Aaj ka Scan ho gaya"
+        _p = APP_DIR / "data" / "IND_Universe_216.csv"
+        if _p.exists():
+            _mt = datetime.fromtimestamp(_p.stat().st_mtime, IST)
+            if _mt.date() == datetime.now(IST).date():
+                return f"Taaza - Aaj {_mt.strftime('%H:%M')} ka"
+            return f"Purana - {_mt.strftime('%d %b %H:%M')} ka - Download Data dabao"
+        return "Nahi hai - Download Data dabao"
+    except Exception:
+        return "Check nahi hua - Download Data dabao"
 _LOCAL_CSV_CACHE = {}  # filename -> (mtime, size, df) - ek scan me ek file ko 10 baar padhna ho to disk se 1 baar hi padhenge, baaki baar cache se
 def local_file_path(filename):
     # Pehle bagal me, nahi mili to data/ folder me - GitHub se aayi file data/ me hogi
@@ -920,61 +939,61 @@ def calc_probability_breakdown(ana):
     gap_pass = gap_val > 0.30
     gap_pts = 15 if gap_pass else 0
     total += gap_pts
-    rows.append({"Criteria": "1. Gap - Khula kitna upar/neeche", "Value": f"{safe_float(ana.get('Gap %',0)):+.2f}% (Chahiye >0.30%)", "Pass?": "✅ PASS" if gap_pass else "❌ FAIL", "Ank": gap_pts, "Max": 15, "Kahan se Check Hua": "IND se - NSE_ + SECURITY_ID se - quotes/full + Historical 5minute se"})
+    rows.append({"Criteria": "1. Gap - Khula kitna upar/neeche", "Value": f"{safe_float(ana.get('Gap %',0)):+.2f}% (Chahiye >0.30%)", "Pass?": "✅ PASS" if gap_pass else "❌ FAIL", "Ank": gap_pts, "Max": 15})
     # 2 VWAP
     ltp = safe_float(ana.get("LTP", 0)); vwap = safe_float(ana.get("VWAP", 0)); gap = safe_float(ana.get("Gap %", 0))
     vwap_pass = (ltp > vwap and gap > 0) or (ltp < vwap and gap < 0)
     vwap_pts = 15 if vwap_pass else 0
     total += vwap_pts
-    rows.append({"Criteria": "2. VWAP - LTP VWAP ke sahi taraf hai?", "Value": f"LTP {ltp:.2f} vs VWAP {vwap:.2f}", "Pass?": "✅ PASS" if vwap_pass else "❌ FAIL", "Ank": vwap_pts, "Max": 15, "Kahan se Check Hua": "IND Historical 5minute se VWAP"})
+    rows.append({"Criteria": "2. VWAP - LTP VWAP ke sahi taraf hai?", "Value": f"LTP {ltp:.2f} vs VWAP {vwap:.2f}", "Pass?": "✅ PASS" if vwap_pass else "❌ FAIL", "Ank": vwap_pts, "Max": 15})
     # 3 ORB
     orb_pass = bool(ana.get("ORB Break", False))
     orb_pts = 20 if orb_pass else 0
     total += orb_pts
-    rows.append({"Criteria": "3. ORB 09:15-09:30 Break", "Value": f"ORB High {safe_float(ana.get('ORB High',0)):.2f} / Low {safe_float(ana.get('ORB Low',0)):.2f} - Break: {orb_pass}", "Pass?": "✅ PASS" if orb_pass else "❌ FAIL", "Ank": orb_pts, "Max": 20, "Kahan se Check Hua": "IND Historical 5minute se ORB - Day High/Low IND se"})
+    rows.append({"Criteria": "3. ORB 09:15-09:30 Break", "Value": f"ORB High {safe_float(ana.get('ORB High',0)):.2f} / Low {safe_float(ana.get('ORB Low',0)):.2f} - Break: {orb_pass}", "Pass?": "✅ PASS" if orb_pass else "❌ FAIL", "Ank": orb_pts, "Max": 20})
     # 4 Volume
     volx = safe_float(ana.get("Vol x", 0))
     vol_pass = volx > 1.5
     vol_pts = 15 if vol_pass else 0
     total += vol_pts
-    rows.append({"Criteria": "4. Volume - Aaj zyada Volume hai?", "Value": f"{volx:.2f}x (Chahiye >1.5x)", "Pass?": "✅ PASS" if vol_pass else "❌ FAIL", "Ank": vol_pts, "Max": 15, "Kahan se Check Hua": "IND quotes/full Volume + Historical 5minute se Volume x"})
+    rows.append({"Criteria": "4. Volume - Aaj zyada Volume hai?", "Value": f"{volx:.2f}x (Chahiye >1.5x)", "Pass?": "✅ PASS" if vol_pass else "❌ FAIL", "Ank": vol_pts, "Max": 15})
     # 5 Movement Started
     mv_started = str(ana.get("Movement Started?", "")) == "HAAN"
     mv_pts = 15 if mv_started else 0
     total += mv_pts
-    rows.append({"Criteria": "5. Movement Started? - Abhi bhag raha hai ya so raha hai", "Value": str(ana.get("Movement Started?", "")), "Pass?": "✅ PASS" if mv_started else "❌ FAIL", "Ank": mv_pts, "Max": 15, "Kahan se Check Hua": "IND Historical 5minute Last 5min + Day Range se"})
+    rows.append({"Criteria": "5. Movement Started? - Abhi bhag raha hai ya so raha hai", "Value": str(ana.get("Movement Started?", "")), "Pass?": "✅ PASS" if mv_started else "❌ FAIL", "Ank": mv_pts, "Max": 15})
     # 6 Trending
     trend_score = safe_float(ana.get("Trending Score", 0))
     trend_pass = trend_score >= 60
     trend_pts = 10 if trend_pass else 0
     total += trend_pts
-    rows.append({"Criteria": "6. Trending Score >=60", "Value": f"{trend_score:.0f}", "Pass?": "✅ PASS" if trend_pass else "❌ FAIL", "Ank": trend_pts, "Max": 10, "Kahan se Check Hua": "IND Historical 5minute Session Story S1/S2/S3 se"})
+    rows.append({"Criteria": "6. Trending Score >=60", "Value": f"{trend_score:.0f}", "Pass?": "✅ PASS" if trend_pass else "❌ FAIL", "Ank": trend_pts, "Max": 10})
     # 7 Volatility OK
     mov_type = str(ana.get("Movement Type", ""))
     vol_ok = ("CHOPPY" not in mov_type and "VOLATILE" not in mov_type)
     vol_ok_pts = 10 if vol_ok else 0
     total += vol_ok_pts
-    rows.append({"Criteria": "7. Volatility OK - Choppy / Volatile to nahi", "Value": mov_type, "Pass?": "✅ PASS" if vol_ok else "❌ FAIL", "Ank": vol_ok_pts, "Max": 10, "Kahan se Check Hua": "IND Historical 5minute Wick + Reversal se"})
+    rows.append({"Criteria": "7. Volatility OK - Choppy / Volatile to nahi", "Value": mov_type, "Pass?": "✅ PASS" if vol_ok else "❌ FAIL", "Ank": vol_ok_pts, "Max": 10})
     # Katoti
     fake = bool(ana.get("Fake Breakout", False))
     fake_pts = -30 if fake else 0
     total += fake_pts
-    rows.append({"Criteria": "KATOTI: Fake Breakout - Trap hai?", "Value": "HAAN - TRAP" if fake else "NAHI", "Pass?": "❌ KATA" if fake else "✅ SAHI", "Ank": fake_pts, "Max": 0, "Kahan se Check Hua": "ORB toota lekin 15min me wapas - IND se"})
+    rows.append({"Criteria": "KATOTI: Fake Breakout - Trap hai?", "Value": "HAAN - TRAP" if fake else "NAHI", "Pass?": "❌ KATA" if fake else "✅ SAHI", "Ank": fake_pts, "Max": 0})
     choppy = "CHOPPY" in mov_type
     choppy_pts = -20 if choppy else 0
     total += choppy_pts
-    rows.append({"Criteria": "KATOTI: Choppy", "Value": mov_type, "Pass?": "❌ KATA" if choppy else "✅ SAHI", "Ank": choppy_pts, "Max": 0, "Kahan se Check Hua": "IND se"})
+    rows.append({"Criteria": "KATOTI: Choppy", "Value": mov_type, "Pass?": "❌ KATA" if choppy else "✅ SAHI", "Ank": choppy_pts, "Max": 0})
     side = "SIDEWAYS" in mov_type
     side_pts = -15 if side else 0
     total += side_pts
-    rows.append({"Criteria": "KATOTI: Sideways", "Value": mov_type, "Pass?": "❌ KATA" if side else "✅ SAHI", "Ank": side_pts, "Max": 0, "Kahan se Check Hua": "IND se"})
+    rows.append({"Criteria": "KATOTI: Sideways", "Value": mov_type, "Pass?": "❌ KATA" if side else "✅ SAHI", "Ank": side_pts, "Max": 0})
     # V40 - Gemini sahi tha: Fake -30 + Choppy -20 + Sideways -15 = -65 ho jata tha, mazboot stock bhi 5-10 pe aa jata tha
     # Katoti kabhi -30 se zyada nahi hogi - taaki ek hi wajah se stock poora khatam na ho
     _kat_total = fake_pts + choppy_pts + side_pts
     if _kat_total < -30:
         _adj = -30 - _kat_total
         total += _adj
-        rows.append({"Criteria": "KATOTI CAP: Katoti -30 se zyada nahi", "Value": f"Katoti {_kat_total} thi, cap karke -30 ki", "Pass?": "✅ CAP", "Ank": _adj, "Max": 0, "Kahan se Check Hua": "V40 - Ek hi wajah se stock khatam nahi hoga"})
+        rows.append({"Criteria": "KATOTI CAP: Katoti -30 se zyada nahi", "Value": f"Katoti {_kat_total} thi, cap karke -30 ki", "Pass?": "✅ CAP", "Ank": _adj, "Max": 0})
     total = max(0, min(100, int(total)))
     return pd.DataFrame(rows), total
 
@@ -987,7 +1006,7 @@ STOCK_ALIASES = {
     "AXIS": "AXISBANK", "AXISBANK": "AXISBANK",
     "SBIN": "SBIN", "SBI": "SBIN",
     "INFY": "INFY", "INFOSYS": "INFY",
-    "TCS": "TCS",
+    "TCS": "TCS", "TECHM": "TECHM", "TCHM": "TECHM", "TECH MAHINDRA": "TECHM", "STATE BANK OF INDIA": "SBIN", "STATE BANK": "SBIN",
     "BHEL": "BHEL", "BHARATHEAVY": "BHEL",
     "EICHER": "EICHERMOT", "EICHERMOT": "EICHERMOT",
     "TATAMOTOR": "TATAMOTORS", "TATAMOTORS": "TATAMOTORS", "TATA MOTORS": "TATAMOTORS",
@@ -2773,7 +2792,7 @@ def scan_from_saved_history():
                     "Movement Started?": _moved, "Movement Type": _mtype, "Movement": _mtype,
                     "Direction": _dir, "Pass": f"{_pass}/4", "Pass_Count": _pass,
                     "Volatility OK": "✅" if "SIDEWAYS" not in _mtype else "❌", "Fake?": "NAHI",
-                    "Wick": 0.0, "Reversal": 0, "Source": "SAVED", "Pattern": "", "Movement Detail": f"Saved din {_last_day} - Gap {_gap:+.2f}% - Vol {_volx:.1f}x - {_mtype}",
+                    "Wick": 0.0, "Reversal": 0, "Pattern": "", "Movement Detail": f"Saved din {_last_day} - Gap {_gap:+.2f}% - Vol {_volx:.1f}x - {_mtype}",
                     "Session Story": f"Saved data se - {_last_day}", "Day Range %": round(((_high - _low) / _open * 100) if _open else 0, 2),
                     "Trending Score": 60 if abs(_move_pct) >= 1 else 30, "Fake Breakout": False,
                 })
@@ -2885,7 +2904,7 @@ def ind_scan_all_ind_only(progress_cb=None):
                 row["Fake?"] = "HAAN - TRAP" if bool(ana.get("Fake Breakout", False)) else "NAHI"
                 row["Wick"] = safe_float(ana.get("Wick Ratio", 0))
                 row["Reversal"] = safe_int(ana.get("Reversal Count", 0))
-                row["Source"] = ""
+
                 rows.append(row)
             except Exception as e:
                 debug["ind_fail"].append(stock)
@@ -3465,7 +3484,7 @@ def scan_with_ind(token, scrip_map, progress_cb=None):
                 "Direction": str(ana.get("Direction", "")), "Pattern": str(ana.get("Pattern", "")), "Movement": str(ana.get("Movement", "")),
                 "Movement Started?": str(ana.get("Movement Started?", "")), "Fake?": "HAAN - TRAP" if bool(ana.get("Fake Breakout", False)) else "NAHI",
                 "Probability %": int(score), "Gap": "✅" if c1_gap else "❌", "VWAP": "✅" if c2_vwap else "❌", "ORB": "✅" if c3_orb else "❌", "Volume": "✅" if c4_vol else "❌", "Volatility OK": "✅" if c5_volatility_ok else "❌", "Pass": f"{pass_count}/4",
-                "Source": "IND-Historical",
+
                 "15min Confirm": "✅" if trend_15_ok else "❌ Ulta",
                 "Candles": int(ana.get("Candles", 0)),
             })
@@ -3512,7 +3531,7 @@ def fetch_indices_history():
         _qdata, _qmsg = ind_quotes_full_docs_pattern(_codes, _tok)
         rows = []
         for _c, _d in _qdata.items():
-            rows.append({"Index": _code_to_name.get(_c, _c), "LTP (IND se)": safe_float(_d.get("live_price", 0)), "Change % (IND se)": safe_float(_d.get("day_change_percentage", 0)), "Volume": safe_float(_d.get("volume", 0))})
+            rows.append({"Index": _code_to_name.get(_c, _c), "LTP": safe_float(_d.get("live_price", 0)), "Change %": safe_float(_d.get("day_change_percentage", 0)), "Volume": safe_float(_d.get("volume", 0))})
         return pd.DataFrame(rows)
     except Exception as e:
         return pd.DataFrame()
@@ -4306,6 +4325,7 @@ init_db()
 # ---------------- LOGIN ----------------
 if not st.session_state.authenticated:
     st.title("Scan Stock")
+    st.caption(f"Find Stock Version {APP_VERSION}")
     st.write("Token daalo.")
     # PIN HATA DIYA HAI - Ab sirf IND ka Secret Code hi kaafi hai. 4 ank ka Code ab kabhi nahi mangega.
     with st.form("login_form"):
@@ -4338,12 +4358,13 @@ try:
     _tok_ok = "✅ Token" if st.session_state.get("indmoney_secret", "") else "❌ Token nahi"
     _gh_ok = "✅ GitHub" if GITHUB_TOKEN and GITHUB_REPO else "❌ GitHub nahi"
     _uni_n = len(st.session_state.get("universe_216_df", pd.DataFrame())) if st.session_state.get("universe_216_df", None) is not None else 0
-    st.caption(f"{_tok_ok} | {_gh_ok} | Universe: {_uni_n} stocks | Data: INDstocks se")
+    st.caption(f"{_tok_ok} | {_gh_ok} | Universe: {_uni_n} stocks | Data: {data_freshness_line()}")
 except:
     pass
 top_left, top_right = st.columns([4, 1])
 with top_left:
     st.title("Scan Stock")
+    st.caption(f"Find Stock Version {APP_VERSION}")
 with top_right:
     st.write("")
     if st.button("Trading Diary", use_container_width=True):
@@ -4517,46 +4538,21 @@ st.divider()
 # Ye 5 ka example nahi hai - ye koi bhi 1 stock ke liye hai, jab tum chaaho tab check karo, poora Scan kiye bina.
 st.markdown("### Search")
 st.write("")
-_single_input = st.text_input("Stock", placeholder="RELIANCE", key="single_stock_input")
+# V42 - Sirf ek hi search - neeche wala dropdown. Upar wala Stock text input hata diya - do search se confusion hota tha.
 _single_resolved = None
-_single_sugg = []
-_single_opts_216 = []  # V41 - Pehle se khali, nahi to RELIANCE / SBI milte hi NameError aata tha - wahi photo wala crash
-if _single_input:
-    _single_resolved, _single_sugg = resolve_stock_name(_single_input)
-    if _single_resolved:
-        st.success(f"{_single_resolved}")
-    elif _single_sugg:
-        st.info("Chuno:")
-        _single_resolved = st.selectbox("Chuno", _single_sugg, key="single_stock_select")
-    else:
-        st.warning("Nahi mila")
-        # Dropdown me sab dikha do taaki wahan se chun sake - Ye selectbox SIRF is else me hai
-        # Pehle ye bahar tha, isliye RELIANCE milne pe bhi chalta tha aur _single_opts_216 bana hi nahi hota tha -> NameError -> poora app girta tha
-        _raw_opts = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
-        try:
-            _single_opts_216, _ = normalize_universe_to_symbols(_raw_opts, pd.DataFrame({"STOCK": _raw_opts}))
-        except Exception:
-            _single_opts_216 = list(MARKET_STOCKS.keys())
-        _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216)} stocks", [""] + _single_opts_216, key="single_stock_all_select")
-        if _single_resolved == "":
-            _single_resolved = None
-else:
-    # Khali hai to bhi Dropdown de do - wahan se bhi chun sakte ho
-    # V39 - FIX: Search wala hissa kabhi poora app nahi girayega - pehle se khali karke rakho, phir bharo
-    _single_opts_216b = []
+_single_opts_216 = []
+try:
+    _raw_opts = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
+    _single_opts_216, _ = normalize_universe_to_symbols(_raw_opts, pd.DataFrame({"STOCK": _raw_opts}))
+except Exception:
+    _single_opts_216 = list(MARKET_STOCKS.keys())
+try:
+    _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216)} stocks", [""] + _single_opts_216, key="single_stock_dropdown_empty")
+except Exception as _e_sel:
+    st.write(f"Search me error - {_e_sel} - neeche wale AI se Puchho se puchh lo")
     _single_resolved = None
-    try:
-        _raw_opts_b = st.session_state.get("universe_216_df", pd.DataFrame())["STOCK"].astype(str).tolist() if st.session_state.get("universe_216_df", None) is not None and not st.session_state.get("universe_216_df", pd.DataFrame()).empty else list(MARKET_STOCKS.keys())
-        _single_opts_216b, _ = normalize_universe_to_symbols(_raw_opts_b, pd.DataFrame({"STOCK": _raw_opts_b}))
-    except Exception:
-        _single_opts_216b = list(MARKET_STOCKS.keys())
-    try:
-        _single_resolved = st.selectbox(f"Chuno - {len(_single_opts_216b)} stocks", [""] + _single_opts_216b, key="single_stock_dropdown_empty")
-    except Exception as _e_sel:
-        st.write(f"Search me error - {_e_sel} - neeche wale AI se Puchho se puchh lo")
-        _single_resolved = None
-    if _single_resolved == "":
-        _single_resolved = None
+if _single_resolved == "":
+    _single_resolved = None
 if _single_resolved:
     # V22 - Single Search bhi Code se hi hoga - naam sirf Suggestion ke liye hai, andar Code se khojenge
     # Pehle Code nikal lo, phir dikhao - taaki pata chale naam se nahi, Code se search ho raha hai
@@ -4651,14 +4647,14 @@ if st.session_state.get("single_result"):
     # SIRF IND KA TABLE - Teenon ka nahi, ek hi sahi wala - Docs wala quotes/full se LTP + Candle se baaki
     _iA = _sr.get("ind_ana") or {}; _iQ = _sr.get("ind_quote") or {}
     _ind_rows = [
-        {"Cheez": "LTP (IND se)", "Value": safe_float(_iQ.get("ltp",0)) if _iQ else safe_float(_iA.get("LTP",0)) if _iA else 0, "Kahan se": "IND quotes/full - NSE_ + SECURITY_ID se"},
-        {"Cheez": "Change % (IND se)", "Value": safe_float(_iQ.get("change_pct",0)) if _iQ else safe_float(_iA.get("Gap %",0)) if _iA else 0, "Kahan se": "IND quotes/full - day_change_percentage"},
-        {"Cheez": "Gap % (IND Candle se)", "Value": safe_float(_iA.get("Gap %",0)) if _iA else 0, "Kahan se": "IND Historical 5minute se"},
-        {"Cheez": "VWAP (IND Candle se)", "Value": safe_float(_iA.get("VWAP",0)) if _iA else 0, "Kahan se": "IND Historical 5minute se"},
-        {"Cheez": "Day High (IND se)", "Value": safe_float(_iQ.get("high",0)) if _iQ else safe_float(_iA.get("Day High",0)) if _iA else 0, "Kahan se": "IND quotes/full - day_high"},
-        {"Cheez": "Day Low (IND se)", "Value": safe_float(_iQ.get("low",0)) if _iQ else safe_float(_iA.get("Day Low",0)) if _iA else 0, "Kahan se": "IND quotes/full - day_low"},
-        {"Cheez": "Volume (IND se)", "Value": safe_float(_iQ.get("volume",0)) if _iQ else 0, "Kahan se": "IND quotes/full - volume"},
-        {"Cheez": "Volume x (IND Candle se)", "Value": safe_float(_iA.get("Vol x",0)) if _iA else 0, "Kahan se": "IND Historical 5minute se"},
+        {"Cheez": "LTP", "Value": safe_float(_iQ.get("ltp",0)) if _iQ else safe_float(_iA.get("LTP",0)) if _iA else 0},
+        {"Cheez": "Change %", "Value": safe_float(_iQ.get("change_pct",0)) if _iQ else safe_float(_iA.get("Gap %",0)) if _iA else 0},
+        {"Cheez": "Gap %", "Value": safe_float(_iA.get("Gap %",0)) if _iA else 0},
+        {"Cheez": "VWAP", "Value": safe_float(_iA.get("VWAP",0)) if _iA else 0},
+        {"Cheez": "Day High", "Value": safe_float(_iQ.get("high",0)) if _iQ else safe_float(_iA.get("Day High",0)) if _iA else 0},
+        {"Cheez": "Day Low", "Value": safe_float(_iQ.get("low",0)) if _iQ else safe_float(_iA.get("Day Low",0)) if _iA else 0},
+        {"Cheez": "Volume", "Value": safe_float(_iQ.get("volume",0)) if _iQ else 0},
+        {"Cheez": "Volume x", "Value": safe_float(_iA.get("Vol x",0)) if _iA else 0},
     ]
     st.dataframe(pd.DataFrame(_ind_rows), use_container_width=True, hide_index=True)
     _best = _sr.get("best_ana")
