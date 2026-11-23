@@ -1,67 +1,4 @@
-# app.py - V30 - Option Chain Fix + Fast Scan - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - History Cache GitHub Se - Docs Pattern scrip-codes=NSE_2885 - Yahoo/NSE Band - FULL DAY MOVEMENT + HISTORICAL DATA - INDstocks Docs se bana hua COMPLETE SCRIPT
-# ============================================================================================
-# KYA BADLA HAI V15 ME - USER NE SAHI KAHA THA:
-# Pehle hum sirf OPEN-HIGH dekh rahe the. Matlab 9:15-9:30 ka ORB dekh ke bol dete the "Breakout hai".
-# Lekin asli trading me Open-High se kuch nahi hota. Stock subah bhagta hai, dopahar me wapas aa jata hai.
-# Ya subah sideways rehta hai, dopahar me bhagta hai. Ya pura din upar-neeche karke wahi ka wahi band hota hai.
-# Isliye V15 me hum poora din dekhte hain - INDstocks HISTORICAL DATA se.
-#
-# DOCS JO CHECK KI GAYI:
-# 1. Getting Started Step 3 - https://api-docs.indstocks.com/getting-started/
-#    base_url = 'https://api.indstocks.com' , headers = {'Authorization': access_token} - Bearer NAHI
-#    GET /market/quotes/full?scrip-codes=NSE_2885,NSE_11536
-# 2. Option Chain - https://api-docs.indstocks.com/utility/
-#    GET /market/option-chain?exchange=NSE&segment=EQUITY&underlying-scrip=2885&expiry=YYYY-MM-DD&strike_count=25
-#    Response: data.strikes = { "24450": {"ce": {...}, "pe": {...}} } - dict hai, list NAHI
-# 3. Contracts & Expiries - https://api-docs.indstocks.com/contracts/
-#    GET /market/instruments/expiries?underlying=RELIANCE&segment=DERIVATIVE - ascending list, pehli wali Nearest
-# 4. Instruments - https://api-docs.indstocks.com/instruments/
-#    GET /market/instruments?source=equity - CSV aati hai, usme SYMBOL_NAME se SECURITY_ID nikalna hai
-#    RELIANCE = 2885, TCS = 11536 - Docs me likha hai. FNO wali ID NAHI leni, EQUITY wali leni hai.
-# 5. Historical Data - https://api-docs.indstocks.com/historicalData/ - TUMHARE PHOTO WALA PAGE
-#    GET /market/historical/{interval} - interval = 5minute, 1day, 1minute, 15minute, 60minute etc.
-#    Query: scrip-codes = max 5 - Example: NSE_3045,NFO_51011 - 5 se zyada bhejoge to 400 aayega
-#           start_time = Unix epoch MILLISECONDS (inclusive)
-#           end_time   = Unix epoch MILLISECONDS (exclusive)
-#    Response: {"success": true, "data": {"NSE_1594": {"candles": [{"ts": 1782877500, "o":1007, "h":1013.9, "l":999.3, "c":1000.4, "v":2847163}]}}}
-#    IMPORTANT:
-#    - start_time / end_time MILLISECONDS me bhejne hain, lekin candle ka "ts" SECONDS me aata hai. ts*1000 karke next request banao.
-#    - Candle ka ts = candle OPEN hone ka time hai. 5minute candle 09:15 wali 09:15-09:19 ko cover karti hai.
-#    - Buckets 09:15 IST se align hote hain - 5minute wali 09:15, 09:20, 09:25... 15minute wali 09:15, 09:30, 09:45...
-#    - 5minute ka Max Range 7 Din hai, 60minute ka 15 Din, 1day ka 1 Saal hai. Isse zyada mangoge to max window ka data aayega, error nahi.
-#    - Jo code window me data nahi hai, wo "data" me aayega hi nahi - isliye returned keys check karo, assume mat karo.
-#    - Candle fields har interval pe same hain: ts, o, h, l, c, v. OI ke liye Option Chain dekho, Historical me OI nahi aata.
-#
-# IS SCRIPT ME FULL-DAY MOVEMENT KAISE CHECK HOTA HAI - SIRF OPEN-HIGH NAHI:
-# Har stock ke liye hum 2 tarah ka Historical Data mangte hain:
-#   A) AAJ KA 5minute - 09:15 se ab tak - 75 candles tak. Isse poora din ka khel pata chalta hai.
-#   B) PICHHLE 30 DIN KA 1day - ATR, Trend, Support, Pichhla Move nikalne ke liye.
-# Phir us 5minute data se hum ye sab nikalte hain:
-#   1. Day Range % = (Day High - Day Low) / Open * 100 - Din kitna bada tha?
-#   2. Range vs ATR = Day Range / ATR(14 din). 1.0 se zyada matlab aaj normal se bada din tha, 0.6 se kam matlab bilkul chhota din.
-#   3. VWAP - Typical Price * Volume ka weighted average. LTP VWAP se kitna upar/neeche hai, aur kitni % candles VWAP ke upar band hui.
-#   4. ORB 9:15-9:30 - Pehli 3 candles (09:15, 09:20, 09:25) ka High/Low. Breakout hua? Kitni der tika? Fake breakout tha ya pakka?
-#   5. 3 SESSION - Subah (09:15-11:30), Dopahar (11:30-13:30), Aakhiri (13:30-15:30) - har session ka alag Open/Close/Range/Direction.
-#      Example: Subah bhaga, dopahar sideways, aakhiri me wapas gira = TRAP wala din.
-#   6. VOLATILITY - 5min returns ka Standard Deviation, Wick Ratio (upar-neeche ki batti kitni lambi hai), VWAP Cross Count (kitni baar VWAP ko kaata),
-#      Reversal Count (kitni baar direction palta), Body vs Range (candle ka body kitna bada hai).
-#   7. SIDEWAYS vs BHAG RAHA vs VOLATILE ka faisla - in sab ko milake:
-#      - SIDEWAYS = Range chhota + VWAP ke aas-paas atka + ORB nahi toota + Reversal zyada nahi, bas ek jagah atka.
-#      - BHAG RAHA UPAR = Range bada + LTP Day High ke paas + 70%+ candles VWAP ke upar + Subah se dopahar tak ek hi direction + Volume badha hua.
-#      - BHAG RAHA NEECHE = ulta.
-#      - VOLATILE / CHOPPY = Range bada lekin Net Move chhota + VWAP ko 4+ baar kaata + Wick lambi + Baar-baar direction palta = isme Option khareedna khatarnak hai, premium kha jayega.
-#      - DHIRE DHIRE = Range medium, ek direction me dheere-dheere chal raha hai, breakout nahi hua lekin trend hai.
-#   8. MOVEMENT STARTED? - ORB toota + 2 candles uske bahar band hui + Volume 1.2x se zyada + VWAP confirm = HAAN, nahi to NAHI.
-#   9. FAKE vs PAKKA - ORB toota lekin 15 min me wapas andar aa gaya = FAKE. ORB toota aur VWAP ke upar tik gaya = PAKKA.
-#
-# BAAKI SAB V14 WALA HI HAI:
-# - Login sirf IND Token + 4 ank PIN se. Token 24 ghante me expire hota hai, roz naya banao indstocks.com/app/api-trading/access-tokens se.
-# - Scan: NSE+BSE F&O stocks, 5 Conditions: Gap, VWAP, ORB, Volume, VIX (VIX ko hum Volatility se dekhte hain)
-# - Option Chain: SIRF IND se, NSE Website se NAHI, Yahoo se NAHI. Galat hoga to wajah likhi aayegi.
-# - Strike: Nearest Expiry, Total Strikes check, Rs 5000 me 1 Lot kaunsa fit hoga, Entry/SL/Target.
-# - Telegram: Secrets se, Chat ID button NAHI hai, bhejne ke baad sirf "Chala gaya" likha aayega, bot ka naam / chat ID NAHI dikhega.
-# - Diary: Ek hi CSV - all_trades.csv - Roz alag file NAHI. Diary button corner me.
-# - Trade MANUAL hai, app kabhi auto-trade NAHI karega.
+# app.py - V31 - Scanner - IND-Only
 # ============================================================================================
 import streamlit as st
 import pandas as pd
@@ -83,7 +20,7 @@ try:
 except:
     IST = timezone(timedelta(hours=5, minutes=30))
 
-st.set_page_config(page_title="Scanner V30 - Option Chain Fix + Fast Scan - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix", layout="wide")
+st.set_page_config(page_title="Scanner V31 - Search + Scan Symbol Fix - Fast - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix", layout="wide")
 
 # ---------------- CONFIG ----------------
 CAPITAL = 5000
@@ -416,7 +353,8 @@ def ind_get_all_scrips(token):
                     if _col2 in _sc_df.columns:
                         for _sym2, _sid2 in zip(_sc_df[_col2].astype(str), _sc_df["SECURITY_ID"].astype(str)):
                             _sym2 = _sym2.strip().upper(); _sid2 = _sid2.strip()
-                            if _sym2 and _sym2 != "NAN" and _sid2 and _sid2.lower() != "nan" and _sym2 not in _out:
+                            if _sym2 and _sym2 != "NAN" and _sid2 and _sid2.lower() != "nan":
+                                # Full naam se bhi Code mile - "ADANI ENERGY SOLUTION LTD" likha to bhi 10217 mile - isliye har naam ko key banao, sirf naya wala hi nahi
                                 _out[_sym2] = _sid2
                 if len(_out) > len(KNOWN_SCRIP):
                     return _out
@@ -1065,6 +1003,25 @@ def build_universe_from_masters(fno_df=None, equity_df=None, scrip_codes_df=None
             else:
                 underlyings = sorted(list(scrip_map2.keys()))
         underlyings = sorted([u for u in underlyings if u not in INDEX_UNDERLYINGS])
+        # V31 - Universe ko SYMBOL me badlo - FNO se UNDERLYING full naam aata hai ("ADANI ENERGY SOLUTION LTD"), SCAN ko SYMBOL chahiye ("ADANIENSOL").
+        # Pehle full naam hi universe me chala jata tha, phir Code nahi milta tha, isliye SCAN 0 aata tha. Ab Symbol me badal ke hi universe banega.
+        try:
+            _mapped_u, _udf_mapped = normalize_universe_to_symbols(underlyings, pd.DataFrame({"STOCK": underlyings}))
+            if _mapped_u:
+                _disp_for_rows = {}
+                try:
+                    if _udf_mapped is not None and not _udf_mapped.empty and "DISPLAY_NAME" in _udf_mapped.columns:
+                        for _rr in _udf_mapped.itertuples():
+                            _disp_for_rows[str(getattr(_rr, "STOCK", ""))] = str(getattr(_rr, "DISPLAY_NAME", ""))
+                except:
+                    pass
+                underlyings = _mapped_u
+                # Rows banate time DISPLAY_NAME bhi rakhne ke liye map ko aage use karenge
+                _BUILD_DISP_MAP = _disp_for_rows
+            else:
+                _BUILD_DISP_MAP = {}
+        except Exception:
+            _BUILD_DISP_MAP = {}
         rows = []
         for _u in underlyings:
             _info = scrip_map2.get(_u, {})
@@ -1080,7 +1037,7 @@ def build_universe_from_masters(fno_df=None, equity_df=None, scrip_codes_df=None
                                 break
                 except:
                     pass
-            rows.append({"STOCK": _u, "SYMBOL_NAME": _u, "SECURITY_ID": _info.get("SECURITY_ID", ""), "SCRIP_CODE_NSE": _info.get("SCRIP_CODE_NSE", ""), "LOT_SIZE": _lot, "EXPIRY_LIST": _info.get("EXPIRY_LIST", "")})
+            rows.append({"STOCK": _u, "SYMBOL_NAME": _u, "DISPLAY_NAME": _BUILD_DISP_MAP.get(_u, _u), "SECURITY_ID": _info.get("SECURITY_ID", ""), "SCRIP_CODE_NSE": _info.get("SCRIP_CODE_NSE", ""), "LOT_SIZE": _lot, "EXPIRY_LIST": _info.get("EXPIRY_LIST", "")})
         _udf = pd.DataFrame(rows) if rows else pd.DataFrame()
         return underlyings, _udf, f"Universe: {len(underlyings)} stocks - Master FNO se DISTINCT UNDERLYING se - Index alag karke"
     except Exception as e:
@@ -1091,19 +1048,21 @@ def get_scan_universe_216(token=None):
     # Returns (list, df, msg)
     try:
         import streamlit as _st
-        # 1) Session me pehle se bana hua universe hai to wahi - sabse fast (Download Data se aaya fresh)
+        # 1) Session me pehle se bana hua universe hai to wahi - sabse fast (Download Data se aaya fresh) - par STOCK ko Symbol me karke hi denge
         _udf = _st.session_state.get("universe_216_df", None)
         if _udf is not None and not _udf.empty and "STOCK" in _udf.columns and len(_udf) >= 100:
-            return _udf["STOCK"].astype(str).str.upper().tolist(), _udf, f"Universe GitHub/Session se turant - {len(_udf)} stocks"
+            _ulist_n, _udf_n = normalize_universe_to_symbols(_udf["STOCK"].astype(str).tolist(), _udf)
+            return _ulist_n, _udf_n, f"Universe Session se turant - {len(_ulist_n)} stocks"
         # 1b) V29 - Bagal wali IND_Universe_216.csv - bani-banayi list, dobara Master se banane ki zaroorat nahi
         try:
             _udf_local, _umsg_local = read_local_csv("IND_Universe_216.csv")
             if _udf_local is not None and not _udf_local.empty and "STOCK" in _udf_local.columns and len(_udf_local) >= 100:
+                _ulist_l, _udf_l = normalize_universe_to_symbols(_udf_local["STOCK"].astype(str).tolist(), _udf_local)
                 try:
-                    _st.session_state["universe_216_df"] = _udf_local
+                    _st.session_state["universe_216_df"] = _udf_l
                 except:
                     pass
-                return _udf_local["STOCK"].astype(str).str.upper().tolist(), _udf_local, f"Universe Same Folder se turant - IND_Universe_216.csv - {len(_udf_local)} stocks - {_umsg_local}"
+                return _ulist_l, _udf_l, f"Universe Same Folder se turant - IND_Universe_216.csv - {len(_ulist_l)} stocks - {_umsg_local}"
         except:
             pass
         # 2) Masters se banao
@@ -1414,6 +1373,8 @@ FULL_NAME_ALIASES = {
     "YESBANK": "YESBANK", "YESBANKLIMITED": "YESBANK",
     "SUZLON": "SUZLON", "SUZLONENERGY": "SUZLON",
     "IDEA": "IDEA", "VODAFONEIDEA": "IDEA",
+    "ADANIENERGYSOLUTION": "ADANIENSOL", "ADANIENSOL": "ADANIENSOL", "ADANIENERGYSOLUTIONLIMITED": "ADANIENSOL", "ADANIENERGYSOLUTIONLTD": "ADANIENSOL", "ADANITRANSMISSION": "ADANIENSOL",
+    "ADANIGREENENERGY": "ADANIGREEN", "ADANIPOWER": "ADANIPOWER",
     "BEL": "BEL", "BHARATELECTRONICS": "BEL",
     "HAL": "HAL", "HINDUSTANAERONAUTICS": "HAL",
     "BANKBARODA": "BANKBARODA", "BOB": "BANKBARODA", "BANKOFBARODA": "BANKBARODA",
@@ -1440,88 +1401,209 @@ def _is_subsequence(small, big):
     it = iter(big)
     return all(ch in it for ch in small)
 
+_SYMBOL_LOOKUP_CACHE = {"map": None, "display": None}
+def _build_symbol_lookup():
+    # V31 - Ek hi jagah se Symbol nikalo - GitHub wali chhoti file se, MARKET_STOCKS (138) se nahi.
+    # Pehle Search sirf MARKET_STOCKS me dekhta tha - usme ADANIENSOL hai hi nahi, isliye "list me nahi hai" bolta tha, jabki neeche Universe table me wahi naam dikh raha tha.
+    # Ab Scrip_Codes (SYMBOL + TRADING + CUSTOM + UNDERLYING full naam) + Universe + KNOWN + Alias - sab se ek map banega, ek baar banega, phir cache se chalega.
+    # Returns (norm_key -> SYMBOL, SYMBOL -> display_full_name)
+    try:
+        if _SYMBOL_LOOKUP_CACHE.get("map") is not None:
+            return _SYMBOL_LOOKUP_CACHE["map"], _SYMBOL_LOOKUP_CACHE["display"]
+        _mp = {}
+        _disp = {}
+        def _add(_key, _sym, _display_name=""):
+            try:
+                if not _key or not _sym:
+                    return
+                _k = _normalize_search_text(str(_key))
+                _s = str(_sym).strip().upper()
+                if not _k or not _s or _s in ("NAN", "NONE", ""):
+                    return
+                # Pehle wali entry jeetegi - Scrip_Codes sabse pehle aata hai, isliye wahi sahi rahega
+                if _k not in _mp:
+                    _mp[_k] = _s
+                # LTD / LIMITED hatake bhi jod do - "ADANI ENERGY SOLUTION LTD" -> "ADANIENERGYSOLUTION" bhi milega
+                for _suf in ("LIMITED", "LTD"):
+                    if _k.endswith(_suf) and len(_k) > len(_suf):
+                        _k2 = _k[:-len(_suf)]
+                        if _k2 and _k2 not in _mp:
+                            _mp[_k2] = _s
+                if _s not in _disp and _display_name:
+                    _disp[_s] = str(_display_name).strip()
+                elif _s not in _disp:
+                    _disp[_s] = _s
+            except:
+                pass
+        # 1) Scrip_Codes - sabse bharosemand - SYMBOL + full naam dono
+        try:
+            _sc, _ = read_local_csv("IND_Scrip_Codes.csv")
+            if _sc is not None and not _sc.empty:
+                for _, _r in _sc.iterrows():
+                    try:
+                        _sym2 = str(_r.get("SYMBOL_NAME", "") or _r.get("STOCK", "")).strip().upper()
+                        if not _sym2 or _sym2 == "NAN":
+                            continue
+                        _under2 = str(_r.get("UNDERLYING_SCRIP_NAME", "") or "").strip()
+                        _disp2 = _under2 if _under2 and _under2.upper() != "NAN" else _sym2
+                        for _col3 in ["STOCK", "SYMBOL_NAME", "TRADING_SYMBOL", "CUSTOM_SYMBOL", "UNDERLYING_SCRIP_NAME"]:
+                            if _col3 in _sc.columns:
+                                _add(str(_r.get(_col3, "")), _sym2, _disp2)
+                    except:
+                        continue
+        except:
+            pass
+        # 2) Universe - isme STOCK kabhi full naam hota hai, SYMBOL_NAME me Symbol - dono jod do
+        try:
+            _ud, _ = read_local_csv("IND_Universe_216.csv")
+            if _ud is not None and not _ud.empty:
+                for _, _r in _ud.iterrows():
+                    try:
+                        _sym3 = str(_r.get("SYMBOL_NAME", "") or _r.get("STOCK", "")).strip().upper()
+                        _stk3 = str(_r.get("STOCK", "")).strip()
+                        # Agar SYMBOL_NAME full naam jaisa hai (space hai) to wo Symbol nahi, full naam hai - usko display me rakho, Symbol ke liye STOCK se mat lo
+                        # Universe me STOCK = full naam, SYMBOL_NAME = full naam bhi - tab Symbol ka pata Scrip_Codes se hi chalega (upar), yahan sirf full naam -> Symbol ka map tabhi jodenge jab Symbol saaf hai (space nahi)
+                        if _sym3 and " " not in _sym3 and _sym3 not in ("NAN",):
+                            _add(_sym3, _sym3, _stk3)
+                        if _stk3:
+                            # STOCK full naam hai to usko bhi key banao, value Symbol hogi agar Symbol saaf hai, nahi to khud hi
+                            _add(_stk3, _sym3 if (" " not in _sym3 and _sym3) else _stk3, _stk3)
+                    except:
+                        continue
+        except:
+            pass
+        # 3) KNOWN + MARKET_STOCKS (138) - purane wale bhi chalte rahen
+        try:
+            for _k5, _v5 in list(KNOWN_SCRIP.items()) + [(k, k) for k in MARKET_STOCKS.keys()]:
+                _add(str(_k5), str(_v5) if str(_v5) in KNOWN_SCRIP else str(_k5), str(_k5))
+        except:
+            pass
+        # 4) FULL_NAME_ALIASES - Tech Mahindra -> TECHM jaisa
+        try:
+            for _k6, _v6 in FULL_NAME_ALIASES.items():
+                _add(str(_k6), str(_v6), str(_v6))
+        except:
+            pass
+        _SYMBOL_LOOKUP_CACHE["map"] = _mp
+        _SYMBOL_LOOKUP_CACHE["display"] = _disp
+        return _mp, _disp
+    except Exception:
+        return {}, {}
+
+def resolve_to_symbol(user_text):
+    # V31 - Koi bhi naam likho - Symbol, poora naam, chhota naam - sab se Symbol niklega. Returns (symbol_or_None, suggestions_list)
+    # "ADANI ENERGY SOLUTION LTD" -> ADANIENSOL, "Tech Mahindra" -> TECHM, "R E L" -> RELIANCE, "TCHM" -> TECHM
+    try:
+        if not user_text:
+            return None, []
+        _mp, _disp = _build_symbol_lookup()
+        if not _mp:
+            return None, []
+        _q = _normalize_search_text(str(user_text))
+        if not _q:
+            return None, []
+        if _q in _mp:
+            return _mp[_q], [_mp[_q]]
+        # LTD / LIMITED hatake
+        _q2 = _q
+        for _suf in ("LIMITED", "LTD"):
+            if _q2.endswith(_suf):
+                _q2 = _q2[:-len(_suf)]
+        if _q2 and _q2 in _mp:
+            return _mp[_q2], [_mp[_q2]]
+        # Contains - q kisi key me hai ya key q me hai - Symbol ke hisab se dedupe karo
+        _syms = []
+        for _k, _v in _mp.items():
+            if _q in _k or _k in _q:
+                if _v not in _syms:
+                    _syms.append(_v)
+        if len(_syms) == 1:
+            return _syms[0], _syms
+        if len(_syms) > 1:
+            # Sabse chhota Symbol pehle - jaise TATA likha to TATA wale sab, par exact jaisa pehle
+            _syms_sorted = sorted(_syms, key=lambda s: (len(s), s))
+            return None, _syms_sorted[:10]
+        # Subsequence - TCHM -> TECHM
+        _sub = []
+        for _k, _v in _mp.items():
+            if _is_subsequence(_q, _k) and _v not in _sub:
+                _sub.append(_v)
+        if len(_sub) == 1:
+            return _sub[0], _sub
+        if len(_sub) > 1:
+            return None, sorted(_sub, key=lambda s: (len(s), s))[:10]
+        return None, []
+    except Exception:
+        return None, []
+
+def normalize_universe_to_symbols(universe_list, universe_df):
+    # V31 - Universe me full naam aaye to Symbol me badlo - SCAN ko Symbol chahiye, full naam se Code nahi milta, isliye SCAN 0 aata tha.
+    # "ADANI ENERGY SOLUTION LTD" -> ADANIENSOL, "RELIANCE INDUSTRIES LIMITED" -> RELIANCE. Jo pehle se Symbol hai wo waisa hi rahega.
+    # Returns (symbol_list, df_with_STOCK=symbol + DISPLAY_NAME=full_naam)
+    try:
+        if not universe_list:
+            return [], universe_df
+        _mp, _disp = _build_symbol_lookup()
+        _new_list = []
+        _disp_map = {}
+        for _u in universe_list:
+            _u_str = str(_u).strip()
+            if not _u_str:
+                continue
+            _sym, _ = resolve_to_symbol(_u_str)
+            _final = _sym if _sym else _u_str.upper()
+            if _final not in _new_list:
+                _new_list.append(_final)
+            # Display ke liye full naam rakho - agar original me space tha to wahi full naam hai, nahi to lookup wala display
+            if _final != _u_str.upper():
+                _disp_map[_final] = _u_str.upper()
+            elif _final in _disp:
+                _disp_map[_final] = _disp[_final]
+            else:
+                _disp_map[_final] = _u_str.upper()
+        _new_list = sorted(_new_list)
+        _new_df = universe_df
+        try:
+            if universe_df is not None and not universe_df.empty and "STOCK" in universe_df.columns:
+                _new_df = universe_df.copy()
+                # STOCK ko Symbol me badlo - har row ka STOCK resolve karo
+                _new_stocks = []
+                for _v in _new_df["STOCK"].astype(str).tolist():
+                    _s2, _ = resolve_to_symbol(_v)
+                    _new_stocks.append(_s2 if _s2 else _v.strip().upper())
+                _new_df["STOCK"] = _new_stocks
+                # SYMBOL_NAME bhi Symbol hi rakho
+                if "SYMBOL_NAME" in _new_df.columns:
+                    _new_df["SYMBOL_NAME"] = _new_stocks
+                # DISPLAY_NAME - full naam, taaki table me dono dikhe
+                _new_df["DISPLAY_NAME"] = [_disp_map.get(s, s) for s in _new_stocks]
+                # Duplicate Symbol hatado - ek Symbol ki ek hi row
+                _new_df = _new_df.drop_duplicates(subset=["STOCK"], keep="first").reset_index(drop=True)
+        except:
+            pass
+        return _new_list, _new_df
+    except Exception:
+        return universe_list, universe_df
+
 def resolve_stock_name(user_text):
-    # Returns (resolved_stock_or_None, suggestions_list)
-    # Ab GitHub CSV File se bhi naam dekh ke search karega, sirf MARKET_STOCKS se nahi.
+    # V31 - Ab GitHub wali chhoti file se Symbol niklega, MARKET_STOCKS (138) se nahi. Pehle wala 30,000-row wala Master loop hataya - wahi slow tha.
+    # Returns (resolved_stock_or_None, suggestions_list) - resolved = SYMBOL jaise ADANIENSOL, TECHM, RELIANCE
     if not user_text:
         return None, []
-    raw = str(user_text).strip()
-    q = _normalize_search_text(raw)
-    if not q:
+    try:
+        _sym, _sugg = resolve_to_symbol(user_text)
+        if _sym:
+            return _sym, [_sym]
+        if _sugg:
+            return None, _sugg[:10]
+        # Alias / MARKET fallback - purana tareeka, sirf chhoti list pe, Master loop nahi
+        _q = _normalize_search_text(str(user_text))
+        if _q in FULL_NAME_ALIASES:
+            _r = FULL_NAME_ALIASES[_q]
+            return _r, [_r]
         return None, []
-    # 1) Pehle Poora Naam + Alias Map me dekho - TECHMAHINDRA -> TECHM, REL -> RELIANCE
-    if q in FULL_NAME_ALIASES:
-        resolved = FULL_NAME_ALIASES[q]
-        if resolved in MARKET_STOCKS:
-            return resolved, [resolved]
-    # Raw bhi check karo - "R E L" wala raw bhi map me hai
-    if raw.strip().upper() in FULL_NAME_ALIASES:
-        resolved = FULL_NAME_ALIASES[raw.strip().upper()]
-        if resolved in MARKET_STOCKS:
-            return resolved, [resolved]
-    # Purana STOCK_ALIASES bhi check karo
-    if q in STOCK_ALIASES:
-        resolved = STOCK_ALIASES[q]
-        if resolved in MARKET_STOCKS:
-            return resolved, [resolved]
-    # 2) Phir Exact match - normalized
-    for stk in MARKET_STOCKS.keys():
-        if _normalize_search_text(stk) == q:
-            return stk, [stk]
-    # 3) Phir Contains - REL in RELIANCE, TECH in TECHM
-    sugg = [s for s in MARKET_STOCKS.keys() if q in _normalize_search_text(s)]
-    if len(sugg) == 1:
-        return sugg[0], sugg
-    if len(sugg) > 1:
-        # Agar kai hain to pehle wale 10 suggestion de do, lekin agar q 3 se bada hai to sabse chhota wala pehle
-        # Jaise TATA likha to saare TATA, TECH likha to TECHM + HCLTECH dono - dono dikhao
-        return None, sugg[:10]
-    # 4) Phir Subsequence - TCHM -> TECHM (T-C-H-M order me hai), REL -> RELIANCE
-    sub_sugg = [s for s in MARKET_STOCKS.keys() if _is_subsequence(q, _normalize_search_text(s))]
-    if len(sub_sugg) == 1:
-        return sub_sugg[0], sub_sugg
-    if len(sub_sugg) > 1:
-        return None, sub_sugg[:10]
-    # 5) Phir GitHub CSV File se dhoondo - us CSV me SYMBOL_NAME, TRADING_SYMBOL, CUSTOM_SYMBOL, UNDERLYING_SCRIP_NAME me naam ho sakta hai
-    try:
-        import streamlit as _st
-        for _key in ["master_fno_df", "master_equity_df", "master_index_df"]:
-            _df = _st.session_state.get(_key, None)
-            if _df is not None and not _df.empty:
-                for _, _row in _df.iterrows():
-                    for _col in ["SYMBOL_NAME", "TRADING_SYMBOL", "CUSTOM_SYMBOL", "UNDERLYING_SCRIP_NAME"]:
-                        if _col in _df.columns:
-                            _val = _normalize_search_text(str(_row[_col]))
-                            if _val and (q in _val or _val in q or _is_subsequence(q, _val)):
-                                # Is row ka SYMBOL_NAME hi asli stock hai
-                                _sym = str(_row.get("SYMBOL_NAME", _row.get("TRADING_SYMBOL", ""))).strip().upper()
-                                if _sym in MARKET_STOCKS:
-                                    return _sym, [_sym]
-                                # Agar MARKET me nahi hai to bhi usi naam ko suggestion de do
-                                if _sym:
-                                    return _sym, [_sym]
-    except:
-        pass
-    # 6) Aakhiri me GitHub File se load karke bhi try karo (session me nahi hai to file se)
-    try:
-        _df_gh, _ = ind_load_master_from_github_file()
-        if _df_gh is not None and not _df_gh.empty:
-            for _, _row in _df_gh.iterrows():
-                for _col in ["SYMBOL_NAME", "TRADING_SYMBOL", "CUSTOM_SYMBOL"]:
-                    if _col in _df_gh.columns:
-                        _val2 = _normalize_search_text(str(_row[_col]))
-                        if _val2 and (q in _val2 or _is_subsequence(q, _val2)):
-                            _sym2 = str(_row.get("SYMBOL_NAME", "")).strip().upper()
-                            if _sym2 in MARKET_STOCKS:
-                                return _sym2, [_sym2]
-    except:
-        pass
-    # Kuch nahi mila to khali
-    if sugg:
-        return None, sugg[:10]
-    if sub_sugg:
-        return None, sub_sugg[:10]
-    return None, []
+    except Exception:
+        return None, []
 
 # ---------------- V18 - KAAM 2: 5-5 KARKE REQUEST + FAIL HONE PE 1-1 RETRY ----------------
 # User ka niyam, bilkul waisa hi:
@@ -3070,7 +3152,7 @@ init_db()
 
 # ---------------- LOGIN ----------------
 if not st.session_state.authenticated:
-    st.title("Scanner V30 - Option Chain Fix + Fast Scan - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix")
+    st.title("Scanner V31 - Search + Scan Symbol Fix - Fast - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY - Full Day + PIN Hataya + Diary Fix")
     st.info("IND Token 24 ghante me expire hota hai. Roz subah naya Token banao: indstocks.com -> Login -> /app/api-trading/access-tokens -> Claim Your API Access -> Generate -> Copy karke yahan daalo.")
     st.write("V15 me Scan IND Historical Data se hota hai - 5minute candles se poora din dekha jata hai, sirf Open-High nahi.")
     # PIN HATA DIYA HAI - Ab sirf IND ka Secret Code hi kaafi hai. 4 ank ka Code ab kabhi nahi mangega.
@@ -3101,7 +3183,7 @@ if not st.session_state.authenticated:
 # ---------------- TOP BAR ----------------
 top_left, top_right = st.columns([4, 1])
 with top_left:
-    st.title("Scanner V30 - Option Chain Fix + Fast Scan - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY | Rs 5,000 | PIN Hataya | Diary Fix | Kisi bhi Time Scan")
+    st.title("Scanner V31 - Search + Scan Symbol Fix - Fast - Same Folder Se Turant - FINAL CALL Sabse Upar - Top Trader Rule se 1 Stock + Chain + Entry/SL/Target - IND-ONLY | Rs 5,000 | PIN Hataya | Diary Fix | Kisi bhi Time Scan")
 with top_right:
     st.write("")
     if st.button("Trading Diary", use_container_width=True):
@@ -3311,7 +3393,7 @@ st.divider()
 # User ka naya Option: Hum jo stock search karein, stock ka naam likhein - jaise RELIANCE ya RIL likhein, to Suggestion de de RELIANCE ka, phir usko search karke bataye ki kitne Criteria pe fit ho raha hai aur 100 me se kitne ank mile.
 # Ye 5 ka example nahi hai - ye koi bhi 1 stock ke liye hai, jab tum chaaho tab check karo, poora Scan kiye bina.
 st.markdown("### 🔍 Ek Stock Search Karo - Sirf IND Se - GitHub CSV File se Code Nikal Ke NSE_ + Code Se")
-st.write("Yahan koi bhi 1 stock likho - GitHub wali CSV File se naam dekh ke `SECURITY_ID` nikalenge, phir `NSE_` + `SECURITY_ID` bana ke sirf IND se search karenge - Docs wala pattern - `scrip-codes: NSE_2885,NSE_11536` - Yahoo / NSE se kuch nahi mangenge. Jaise `Tech Mahindra` likhoge to `TECHM` aayega, `R E L` likhoge to `RELIANCE` aayega, `TCHM` likhoge to bhi `TECHM` aayega. Phir sirf IND se LTP + Candle + Option Chain le ke 100 me se Score batayenge.")
+st.write("Ek stock likho - Symbol ya poora naam.")
 _single_input = st.text_input("Stock ka Naam likho - jaise RELIANCE, RIL, HDFC, BHEL, TATA", placeholder="RIL likho to RELIANCE milega", key="single_stock_input")
 _single_resolved = None
 _single_sugg = []
@@ -3491,7 +3573,7 @@ st.divider()
 try:
     _td = get_trading_day()
     _s, _e = get_scan_window(_td)
-    st.info(f"Abhi Time: {ist_now().strftime('%H:%M:%S')} | Trading Day: {_td} | Scan Window: {_s.strftime('%H:%M')} se {_e.strftime('%H:%M')} tak ki candles li jayengi - 09:20 ho ya 09:35 ho ya 01:00 / 02:00, sab chalega. Fixed 09:20 nahi hai.")
+    st.info(f"Time: {ist_now().strftime('%H:%M:%S')} | Trading Day: {_td} | Window: {_s.strftime('%H:%M')} - {_e.strftime('%H:%M')}")
 except Exception as e:
     pass
 
@@ -3501,25 +3583,29 @@ manual_input = st.text_input("News wala Stock - jaise BHEL, SUZLON - comma se al
 manual_list = []
 if manual_input:
     for _x in manual_input.split(","):
-        _x = _x.strip().upper()
-        if _x and _x in MARKET_STOCKS:
-            manual_list.append(_x)
+        _x = _x.strip()
+        if not _x:
+            continue
+        _m_sym, _m_sugg = resolve_to_symbol(_x)
+        if _m_sym:
+            manual_list.append(_m_sym)
+        elif _m_sugg:
+            st.info(f"{_x} se kai mile - {_m_sugg[:5]} - Ek saaf naam likho")
         elif _x:
-            # Agar user ne BHEL likha to MARKET_STOCKS me hai, agar nahi hai to batado
-            st.warning(f"{_x} list me nahi hai - MARKET_STOCKS me check karo, sahi naam likho jaise BHEL")
+            st.warning(f"{_x} se koi stock nahi mila - Symbol ya poora naam likho, jaise BHEL ya ADANI ENERGY SOLUTION LTD")
 if manual_list:
     st.success(f"Manual add hoga: {', '.join(manual_list)} - Ye Top 5 me nahi bhi hoga to bhi Step 2 (NSE) + Step 3 (IND) me jayega, kyunki News se bhag sakta hai")
 
 
 # ---------------- V25 - 216 UNIVERSE TABLE - Jaruri Jankari - Ek Nazar Me ----------------
-with st.expander("216 Stocks + Jaruri Jankari - STOCK + SECURITY_ID + SCRIP_CODE_NSE + LOT_SIZE + EXPIRY_LIST - Master FNO Se", expanded=False):
+with st.expander("Universe (216)", expanded=False):
     try:
         _tok_u = st.session_state.get("indmoney_secret", "")
         _ulist_u, _udf_u, _umsg_u = get_scan_universe_216(_tok_u)
-        st.write(f"{_umsg_u} - Pehle Download Data dabao to ye 216 wali list GitHub me IND_Universe_216.csv me jama ho jayegi, phir har baar turant milegi.")
+        st.write(f"{_umsg_u}")
         if _udf_u is not None and not _udf_u.empty:
             st.dataframe(_udf_u, use_container_width=True, hide_index=True)
-            st.write(f"Total: {len(_udf_u)} stocks - Har row me STOCK + SECURITY_ID + SCRIP_CODE_NSE (NSE_2885 jaisa) + LOT_SIZE + EXPIRY_LIST - Yahi jaruri jankari scan me use hogi.")
+            st.write(f"Total: {len(_udf_u)} stocks")
         else:
             st.write("Universe abhi khali hai - Download Data dabao, phir 216 wali list yahan dikhegi. Tab tak 138 wala purana list scan me chalega.")
             # Fallback - 138 wala list bhi dikha do
@@ -3530,15 +3616,11 @@ with st.expander("216 Stocks + Jaruri Jankari - STOCK + SECURITY_ID + SCRIP_CODE
 
 
 # ---------------- V26 - HISTORY CACHE STATUS - GitHub se pichhla data kitna mila? ----------------
-with st.expander("History Cache - GitHub Se Pichhla Data Kitna Mila, Aaj Ka Delta Kitna Mangenge - Ye Dekho", expanded=False):
+with st.expander("History Cache", expanded=False):
     try:
         _dc, _tc, _cmsg = load_history_cache_from_github()
         st.write(f"{_cmsg}")
-        st.write("**Niyam:** Historical kabhi nahi badalta - Kal ka candle, kal ka Gap/VWAP/ORB, pichhle 35 din ka ATR - sab wahi rahega. Isliye wo GitHub se aayega. Sirf Aaj ka naya candle (Last Cached Time se Abhi Tak ka Delta) + LTP (quotes/full se) live IND se aayega.")
-        st.write("**Pehla Scan:** Cache khali hoga to 5 min lagega - poora din + 35 din Daily IND se aayega, phir Cache GitHub me jama ho jayega.")
-        st.write("**Dusra Scan (1 ghanta baad):** 80% data Cache se, sirf 1 ghante ka Delta + LTP IND se - isliye 1 min se bhi kam me ho jayega.")
-        st.write("**Expiry:** Mahine / Hafte me 1 baar badalta hai, isliye wo bhi CSV me hai (IND_Scrip_Codes.csv me EXPIRY_LIST) - har scan me API se nahi mangte, sirf Expiry change hone pe update karte hain.")
-        st.write("**Theta / Gamma:** LTP ke saath badalta hai, isliye sirf Top 15 ke liye live Option Chain se aayega, 216 ke liye nahi.")
+        st.write("Cache se pichhla data, IND se sirf naya Delta + LTP.")
         if _dc is not None and not _dc.empty:
             st.write(f"**Daily Cache:** {len(_dc)} rows - Har row = 1 stock x 1 din - STOCK/DATE/OPEN/HIGH/LOW/CLOSE/GAP/VWAP/ORB/VOL_X/MOVEMENT/GREEN/RED")
             st.dataframe(_dc.tail(20), use_container_width=True, hide_index=True)
@@ -3998,10 +4080,5 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         else:
             st.info(f"{sel_stock} ka Option Chain Mango dabao.")
 else:
-    st.info("SCAN NOW dabao - Poora Market Scan hoga, Full Day Movement ke saath.")
-    st.write("V15 me kya check hota hai - Sirf Open-High NAHI:")
-    st.write("1. Aaj ka 5minute - 09:15 se ab tak - Day Range, VWAP, ORB, Session")
-    st.write("2. Pichhle 30 din ka 1day - ATR, Trend, Gap")
-    st.write("3. Volatility - Wick, VWAP Cross, Reversal - Choppy hai ya nahi")
-    st.write("4. Sideways / Bhag Raha / Volatile / Fake - Final faisla")
-    st.write("5. Uske baad hi Option Chain - IND se - Rs 5000 wala Strike")
+    st.info("SCAN NOW dabao.")
+
