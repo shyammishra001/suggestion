@@ -3,8 +3,11 @@
 from findstock.helpers import *
 from findstock import diary as _diary_mod
 from findstock import ind_api as _ind_api_mod
-# V50 FIX - fresh session me keys pehle se set, warna line 8 pe KeyError
-for _k, _v in [("authenticated", False), ("indmoney_secret", ""), ("indmoney_connected", False)]:
+# V51 FIX - saare session keys pehle se set. Scan page line 546 pe st.session_state.scan_df padhne pe KeyError aa raha tha -
+# fresh page pe scan_df kabhi set hi nahi hua tha. setdefault purani value overwrite nahi karta, isliye safe hai.
+# SIRF app.py badla hai - baaki koi file chhedni nahi hai.
+for _k, _v in [("authenticated", False), ("indmoney_secret", ""), ("indmoney_connected", False),
+               ("scan_df", None), ("indices_data", None), ("news_data", None), ("show_diary", False)]:
     st.session_state.setdefault(_k, _v)
 _diary_mod._ensure_diary_csv()
 # ---------------- LOGIN ----------------
