@@ -1,4 +1,4 @@
-# app.py - V46 - Scanner
+# app.py - V47 - Scanner
 # ============================================================================================
 import streamlit as st
 import pandas as pd
@@ -53,7 +53,7 @@ except:
 APP_DIR = Path(__file__).resolve().parent  # app.py jis folder me hai, wahi folder - bagal wali file yahin hai
 MASTER_FOLDER = "data"  # V33 - GitHub me sab master data ek hi folder me - bahar root me nahi. Diary alag hai, wo trades_diary me hi rahegi.
 
-APP_VERSION = 46  # V43 - Chain ki asli wajah + Fill datetime fix + AI branch fallback  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
+APP_VERSION = 47  # V43 - Chain ki asli wajah + Fill datetime fix + AI branch fallback  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
 def data_freshness_line():
     # Data taaza hai ya nahi - bas yehi dikhayenge, kahan se aaya ye nahi.
     # Taaza = Aaj ka Scan isi session me ho gaya, ya Universe file aaj ki hai. Nahi to - Download Data dabao.
@@ -282,6 +282,34 @@ def get_nearest_thursday_fallback():
         return nxt.strftime("%Y-%m-%d")
     except:
         return (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
+
+def get_next_monthly_expiries(count=3):
+    # V47 - Copilot point 6 ka asli fix: Expiry list patli ho to agle monthly expiry (mahine ke aakhri Thursday) bhi candidate banao.
+    # Photo wala case: list me sirf 26 Nov tha, wo khali nikla, app ruk gaya. Ab Dec 31 / Jan 28 bhi try hoga.
+    # Stock options mahine ke aakhri Thursday ko expire hote hain. Holiday-adjusted expiry alag ho sakta hai -
+    # isliye ye sirf CANDIDATE hain, API hi final batayegi (galat expiry pe API 200-khali / 400 dega, hum agli try karenge).
+    try:
+        today = ist_now().date()
+        out = []
+        y, m = today.year, today.month
+        for _ in range(count + 2):
+            if m == 12:
+                _last = datetime(y, 12, 31).date()
+                _ny, _nm = y + 1, 1
+            else:
+                _last = datetime(y, m + 1, 1).date() - timedelta(days=1)
+                _ny, _nm = y, m + 1
+            _back = (_last.weekday() - 3) % 7  # Thursday=3 - aakhri din se peeche jao, aakhri Thursday milega
+            _exp = _last - timedelta(days=_back)
+            _s = _exp.strftime("%Y-%m-%d")
+            if _exp >= today and _s not in out:
+                out.append(_s)
+            y, m = _ny, _nm
+            if len(out) >= count:
+                break
+        return out
+    except:
+        return []
 
 def ind_get_expiries(underlying, token):
     # V21 - Pehle Master File (FNO) se Expiry lo - Mahine me 1 baar Download Data se aayi hui File se.
@@ -2278,9 +2306,13 @@ def _parse_option_chain_data(data):
         if not isinstance(data, dict):
             return pd.DataFrame(), 0
         strikes = data.get("strikes", None)
-        if strikes is None:
+        if not strikes:
             strikes = data.get("options", None)
-        if strikes is None:
+        if not strikes:
+            strikes = data.get("option_chain", None)  # V47 - Copilot point 3: kuch versions me ye naam hota hai
+        if not strikes:
+            strikes = data.get("chain", None)  # V47 - Copilot point 3: ya ye naam hota hai
+        if not strikes:
             return pd.DataFrame(), 0
         # List ko dict jaisa banao
         items = []
@@ -2351,6 +2383,23 @@ def _parse_option_chain_data(data):
 # V45 - 429 GUARD - ek baar Rate Limit laga to 90 sec tak API ko dobara mat chhedo, chahe kitni baar button dabao
 _IND_429_UNTIL = 0
 
+def _get_429_until():
+    # V47 - 429 lock: pehle session_state (har session ka apna lock), nahi to module global (fallback)
+    try:
+        import streamlit as _stg
+        return float(_stg.session_state.get("_ind_429_until", 0) or 0)
+    except:
+        return float(_IND_429_UNTIL)
+
+def _set_429_until(_ts):
+    global _IND_429_UNTIL
+    _IND_429_UNTIL = _ts
+    try:
+        import streamlit as _stg
+        _stg.session_state["_ind_429_until"] = _ts
+    except:
+        pass
+
 def ind_get_option_chain(symbol, token, scrip_map=None):
     # V45 - DOCS WALA TARIKA + 429 KA ILAAJ:
     # Docs (api-docs.indstocks.com/utility/ - Option Chain):
@@ -2368,12 +2417,14 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     # Aur 200 + khali strikes aaye to baki combo mat maaro - API ne samajh ke khali diya hai,
     # usi expiry pe EQUITY+5 / BSE bhi khali hi dega, sirf rate limit khayega.
     # Isliye max calls: success = 1, 200-khali = 2 (2 expiry x 1 combo), 429 = 1. V44 me 12 tak jaate the.
-    global _IND_429_UNTIL
     if not token or len(str(token).strip()) < 10:
         return pd.DataFrame(), "Login nahi hua", "", "", ""
     _now = time.time()
-    if _now < _IND_429_UNTIL:
-        _wait = int(_IND_429_UNTIL - _now)
+    # V47 - 429 lock ab session_state me (Copilot point 2). Lock jaanboojh kar hai - hammering rokne ke liye - bug nahi hai.
+    # Photo (APL Apollo) me lock nahi tha, 200-empty tha - message ne wahi bataya tha. Lock hataya to 429 aur badhega.
+    _lock_until = _get_429_until()
+    if _now < _lock_until:
+        _wait = int(_lock_until - _now)
         return pd.DataFrame(), f"Rate limit laga hua hai - {_wait} sec ruko, phir Chain Mango dabao. API ne zyada call pe rok lagayi hai, ye segment/expiry ki galti nahi hai.", "", "", ""
     # Cache - 5 min me dobara Chain Mango dabaya to API ko mat chhedo, wahi chain dikhao
     try:
@@ -2396,17 +2447,28 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     if not expiries:
         expiries = [get_nearest_thursday_fallback()]
         err_exp = f"Expiry list khali thi, Fallback Thursday {expiries[0]} try kar rahe hain - {err_exp}"
+    # V47 - Copilot point 6: SAARI expiries try karo, [:2] nahi. Photo me sirf 1 expiry try hui thi, isliye chain nahi aayi.
+    # V47 - Copilot point 4 (break->continue) NAHI lagaya, kyunki wo galat hai: same expiry + same underlying pe
+    # strike_count=10 khali ho to count=5 / bina-count bhi khali hi dega - count sirf kitni strikes dikhani hain ye badalta hai,
+    # chain ka hona/na-hona nahi. Asli fix nayi EXPIRY try karna hai, same expiry pe combo badalna nahi.
     _try_expiries = []
-    for _e in list(expiries)[:2]:
+    for _e in list(expiries):
         _es = str(_e).strip()
         if _es and _es not in _try_expiries:
             _try_expiries.append(_es)
+    try:
+        for _me in get_next_monthly_expiries(3):
+            if _me not in _try_expiries:
+                _try_expiries.append(_me)
+    except:
+        pass
     try:
         _fb = get_nearest_thursday_fallback()
         if _fb not in _try_expiries:
             _try_expiries.append(_fb)
     except:
         pass
+    _try_expiries = _try_expiries[:4]  # Max 4 expiry - isse zyada try kiya to hammering + 429
     scrip, _src = ind_get_scrip(symbol, token, scrip_map)
     if not scrip:
         return pd.DataFrame(), f"Scrip nahi mila - {_src}", str(_try_expiries[0]) if _try_expiries else "", "", ""
@@ -2444,7 +2506,7 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
                 r = requests.get(f"{IND_BASE}/market/option-chain", headers=ind_headers(token), params=_params, timeout=15)
                 if r.status_code == 429:
                     # V45 - 429 aaya to RUK JAO. Saare loop band, 90 sec tak koi chain call nahi.
-                    _IND_429_UNTIL = time.time() + 90
+                    _set_429_until(time.time() + 90)
                     _saw_429 = True
                     _last_raw = f"Status 429 - {r.text[:300]}"
                     _last_api_msg = "Rate limit exceeded"
@@ -2486,16 +2548,15 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
                 continue
         if _saw_429:
             break
-        # 200-khali ke baad sirf ek aur expiry try karo, usse zyada nahi - har expiry pe hammering nahi
-        if _saw_200_empty and _expiry != _try_expiries[0]:
-            break
+        # 200-khali ke baad agli expiry try karo - _try_expiries me max 4 hain, isliye hammering nahi hogi
+        # V47 FIX: 2-expiry wali purani rok hatayi - ab saari expiries (Nov 26, Dec 31, Jan 28...) try hongi
     # Failure - teen alag wajah, teen alag sach. Jhootha "combo nahi mila" kabhi nahi bolenge.
     if _saw_429:
-        _msg429 = f"API ne Rate Limit laga diya (429) - {_last_raw[:200]} - 1-2 minute ruko, phir Chain Mango dabao. Ye segment/expiry ki galti nahi hai, API ne zyada call pe rok lagayi hai. Bar-bar dabane se limit aur badhegi."
+        _msg429 = f"API ne Rate Limit laga diya (429) - Scrip {scrip} ({_src}) - {_last_raw[:200]} - 1-2 minute ruko, phir Chain Mango dabao. Ye segment/expiry ki galti nahi hai, API ne zyada call pe rok lagayi hai. Bar-bar dabane se limit aur badhegi."
         _cache_put(pd.DataFrame(), _msg429, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp, 60)
         return pd.DataFrame(), _msg429, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
     if _saw_200_empty:
-        _msgempty = f"Chain khali aayi - Sab try kiya: {' | '.join(_tried)} - LTP {_last_ltp} - API ne 200 de ke khali strikes diye, matlab is expiry pe is stock ke options nahi hain ya chain bani hi nahi. Agli expiry try karo ya thodi der baad dobara try karo."
+        _msgempty = f"Chain khali aayi - Scrip {scrip} ({_src}) - Sab try kiya: {' | '.join(_tried)} - LTP {_last_ltp} - API ne 200 de ke khali strikes diye, matlab in expiries pe is stock ke options nahi hain ya chain bani hi nahi. Agli expiry try karo ya thodi der baad dobara try karo."
         _cache_put(pd.DataFrame(), _msgempty, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp, 60)
         return pd.DataFrame(), _msgempty, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
     _try_txt = " | ".join(_tried)
@@ -2554,7 +2615,13 @@ def ind_get_day_candles_for_symbol(symbol, scrip, token, trading_day):
     # 5minute ka Max Range 7 Din hai, isliye aaj ka din ek call me aa jayega.
     now = ist_now()
     start_dt = datetime(trading_day.year, trading_day.month, trading_day.day, 9, 15, 0, tzinfo=IST)
-    if trading_day == now.date() and now.hour < 15 or (trading_day == now.date() and now.hour == 15 and now.minute <= 30):
+    if (
+        trading_day == now.date()
+        and (
+            now.hour < 15
+            or (now.hour == 15 and now.minute <= 30)
+        )
+    ):
         end_dt = now
     else:
         end_dt = datetime(trading_day.year, trading_day.month, trading_day.day, 15, 30, 0, tzinfo=IST)
