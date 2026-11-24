@@ -23,6 +23,23 @@ from findstock.helpers import IND_BASE, KNOWN_SCRIP, MARKET_STOCKS, _push_master
 
 # ---- V48 split: ye module app_v47.py se nikala gaya, code same hai ----
 # ---------------- INDstocks API - Docs ke hisab se EXACT ----------------
+from datetime import timezone as _TZ, timedelta as _TD
+_IST = _TZ(_TD(hours=5, minutes=30))
+
+
+def _ist_aware(dt):
+    # V50 FIX - naive -> IST localize, aware -> IST convert. None -> None. Kabhi tz error nahi.
+    try:
+        if dt is None:
+            return None
+        _d = pd.to_datetime(dt)
+        if _d.tzinfo is None:
+            return _d.tz_localize(_IST)
+        return _d.tz_convert(_IST)
+    except:
+        return dt
+
+
 def ind_headers(token):
     # Docs Step 2: headers = {'Authorization': access_token} - Bearer NAHI lagana, yehi sabse badi galti thi
     return {"Authorization": str(token).strip(), "Content-Type": "application/json"}
@@ -856,6 +873,11 @@ def download_history_tf_month(token, universe_stocks, scrip_map_dict):
             return [("all", "", False, "History: stocks ya scrip khali")]
         _trading_day = get_trading_day()
         _s, _scan_end = get_scan_window(_trading_day)
+        # V50 FIX - _scan_end bhi IST-aware banao, taaki _last_saved se compare me kabhi tz error na aaye
+        try:
+            _scan_end = _ist_aware(_scan_end)
+        except:
+            pass
         # Pehle check karo - kahan tak saved hai
         try:
             _saved, _saved_df = check_saved_history()
@@ -875,7 +897,9 @@ def download_history_tf_month(token, universe_stocks, scrip_map_dict):
                 _last_saved = (_saved.get(_tf, {}) or {}).get("last")
                 if _last_saved is not None:
                     try:
-                        _last_saved = pd.to_datetime(_last_saved)
+                        # V50 FIX - photo 1 wala error: pd.to_datetime naive deta hai, _scan_end IST-aware hota hai
+                        # -> compare pe "can't compare offset-naive and offset-aware" se poora TF gir jata tha.
+                        _last_saved = _ist_aware(pd.to_datetime(_last_saved))
                     except:
                         _last_saved = None
                 # Agar aakhri saved abhi se 1 candle se kam pehle ka hai to ye TF pehle se poora hai - dobara mat mango
@@ -1091,6 +1115,54 @@ def _set_429_until(_ts):
     except:
         pass
 
+def ind_get_equity_scrip(symbol, token, scrip_map=None):
+    # V50 - Docs (Options Toolkit - Finding underlying-scrip): underlying-scrip = EQUITY cash-market row ka SECURITY_ID.
+    # FNO contract ka ID yahan nahi chalega. Isliye pehle IND_Master_Equity.csv (source=equity) se lo, MAP sirf fallback hai.
+    # NSE row prefer karo - options NSE pe hote hain (Equity me RELIANCE ke 2 row: NSE 2885 + BSE 500325).
+    try:
+        _q0 = str(symbol or "").strip().upper()
+        _cands = [_q0]
+        try:
+            _sym0, _ = resolve_to_symbol(str(symbol))
+            if _sym0 and str(_sym0).upper() not in _cands:
+                _cands.append(str(_sym0).upper())
+        except:
+            pass
+        _eq = None
+        try:
+            import streamlit as _st_e
+            _eq = _st_e.session_state.get("master_equity_df", None)
+        except:
+            pass
+        if _eq is None or (hasattr(_eq, "empty") and _eq.empty):
+            try:
+                _eq, _ = read_local_csv("IND_Master_Equity.csv")
+            except:
+                _eq = None
+        if _eq is not None and not _eq.empty and "SECURITY_ID" in _eq.columns:
+            for _cand in _cands:
+                for _col in ("SYMBOL_NAME", "TRADING_SYMBOL", "CUSTOM_SYMBOL"):
+                    if _col not in _eq.columns:
+                        continue
+                    _m = _eq[_eq[_col].astype(str).str.strip().str.upper() == _cand]
+                    if _m.empty:
+                        continue
+                    if "EXCH" in _eq.columns:
+                        _nse = _m[_m["EXCH"].astype(str).str.strip().str.upper() == "NSE"]
+                        if not _nse.empty:
+                            _m = _nse
+                    _sid = str(_m.iloc[0]["SECURITY_ID"]).strip()
+                    if _sid and _sid.lower() != "nan":
+                        return _sid, "Equity Master se"
+    except:
+        pass
+    try:
+        _s2, _src2 = ind_get_scrip(symbol, token, scrip_map)
+        return _s2, f"MAP ({_src2}) - Equity Master me nahi mila"
+    except:
+        return "", "Equity Master + MAP dono me nahi mila"
+
+
 def ind_get_option_chain(symbol, token, scrip_map=None):
     # V45 - DOCS WALA TARIKA + 429 KA ILAAJ:
     # Docs (api-docs.indstocks.com/utility/ - Option Chain):
@@ -1105,10 +1177,9 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     # V44 ki galti (Photo 2 - 360 ONE WAM): 429 aaya to bhi saare combo try karte rahe,
     # aur aakhri me jhooth bol diya "combo nahi mila". Asal me API ne rok lagayi thi.
     # V45: 429 aate hi RUK JAO - saare loop band, 90 sec tak dobara call hi nahi.
-    # V49 (APL Apollo photo): 200 + khali pe sirf COUNT wale combo bekaar hain (count se chain ka hona nahi badalta),
-    # isliye count wale combos hataye. SEGMENT alag baat hai - DERIVATIVE khali ho to EQUITY try karna banta hai,
-    # kyunki Expiries endpoint DERIVATIVE se kaam karta hai aur chain EQUITY se khali aati hai.
-    # Isliye max calls: success = 1, 200-khali = 12 (4 expiry x 3 segment) - par aam taur pe DERIVATIVE pehli call me hi chain mil jayegi.
+    # Aur 200 + khali strikes aaye to baki combo mat maaro - API ne samajh ke khali diya hai,
+    # usi expiry pe EQUITY+5 / BSE bhi khali hi dega, sirf rate limit khayega.
+    # Isliye max calls: success = 1, 200-khali = 2 (2 expiry x 1 combo), 429 = 1. V44 me 12 tak jaate the.
     if not token or len(str(token).strip()) < 10:
         return pd.DataFrame(), "Login nahi hua", "", "", ""
     _now = time.time()
@@ -1161,22 +1232,22 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     except:
         pass
     _try_expiries = _try_expiries[:4]  # Max 4 expiry - isse zyada try kiya to hammering + 429
-    scrip, _src = ind_get_scrip(symbol, token, scrip_map)
+    scrip, _src = ind_get_equity_scrip(symbol, token, scrip_map)
     if not scrip:
         return pd.DataFrame(), f"Scrip nahi mila - {_src}", str(_try_expiries[0]) if _try_expiries else "", "", ""
     _sym_u = str(symbol).upper()
     _is_index = any(_k in _sym_u for _k in ["NIFTY", "SENSEX", "BANKEX", "FINNIFTY", "MIDCAP"]) or _sym_u in ["NIFTY 50", "NIFTY BANK", "BANK NIFTY"]
     _seg = "INDEX" if _is_index else "EQUITY"
-    # V49 - DERIVATIVE pehle, EQUITY fallback. Docs me EQUITY likha hai, par live API APL Apollo jaise
-    # stocks pe EQUITY se 200-empty deti hai - isliye DERIVATIVE pehle try karte hain.
+    # Sirf docs wale combos - pehla wala hi docs ka example hai
+    # V50 - Docs (Options Toolkit) ke hisab se: segment = INDEX / EQUITY ONLY. DERIVATIVE yahan valid hi nahi hai.
+    # underlying-scrip = Equity cash-market row ka SECURITY_ID (upar ind_get_equity_scrip se aaya hai).
+    # expiry = YYYY-MM-DD, strike_count = har side ke strikes (default 10).
     if _is_index:
         _combos = [
             ({"exchange": "NSE", "segment": "INDEX"}, "NSE + INDEX + count=10", 10),
-            ({"exchange": "NSE", "segment": "DERIVATIVE"}, "NSE + DERIVATIVE + count=10", 10),
         ]
     else:
         _combos = [
-            ({"exchange": "NSE", "segment": "DERIVATIVE"}, "NSE + DERIVATIVE + count=10", 10),
             ({"exchange": "NSE", "segment": "EQUITY"}, "NSE + EQUITY + count=10", 10),
             ({"exchange": "BSE", "segment": "EQUITY"}, "BSE + EQUITY + count=10", 10),
         ]
@@ -1187,7 +1258,7 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     _saw_429 = False
     _saw_200_empty = False
     for _expiry in _try_expiries:
-        for _ci, (_base_params, _combo_name, _scount) in enumerate(_combos):
+        for _base_params, _combo_name, _scount in _combos:
             try:
                 # Pehli call ke baad har call se pehle thoda ruko - API ko hammer mat karo
                 if _tried:
@@ -1238,12 +1309,11 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
                     _msg_ok = f"IND SE AAYA - {_n} strikes - Expiry {_expiry} - {_combo_name} - Scrip {scrip} ({_src}) - LTP {_last_ltp}"
                     _cache_put(_df_chain, _msg_ok, _expiry, scrip, _last_ltp, 300)
                     return _df_chain, _msg_ok, _expiry, scrip, _last_ltp
-                # 200 + khali - is SEGMENT pe khali hai. Agla SEGMENT try karo (DERIVATIVE khali ho to EQUITY).
-                # Saare segment khali ho gaye to hi agli expiry pe jao.
+                # V50 FIX - 200 + khali - is combo pe khali hai, par agla combo (BSE) try karo.
+                # NSE khali hai iska matlab BSE khali hai ye zaroori nahi - alag exchange ki apni chain hoti hai.
+                # Pehle wala break BSE ko kabhi try hi nahi karne deta tha, isliye chain kabhi nahi aati thi.
                 _saw_200_empty = True
-                if _ci < len(_combos) - 1:
-                    continue
-                break
+                continue
             except Exception as _e_combo:
                 _last_raw = f"Combo error - {_e_combo}"
                 continue
@@ -1257,7 +1327,7 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
         _cache_put(pd.DataFrame(), _msg429, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp, 60)
         return pd.DataFrame(), _msg429, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
     if _saw_200_empty:
-        _msgempty = f"Chain khali aayi - Scrip {scrip} ({_src}) - Sab try kiya: {' | '.join(_tried)} - LTP {_last_ltp} - API ne 200 de ke khali strikes diye, matlab in expiries pe is stock ke options nahi hain ya chain bani hi nahi. Agli expiry try karo ya thodi der baad dobara try karo."
+        _msgempty = f"Chain khali aayi - Scrip {scrip} ({_src}) - Sab try kiya: {' | '.join(_tried)} - LTP {_last_ltp} - API ne 200 de ke khali strikes diye, matlab in expiries pe is stock ke options nahi hain ya chain bani hi nahi. Market band ho to chain khali aa sakti hai - market hours (9:15-3:30) me try karo. Scrip Equity Master (cash-market row) se liya gaya hai."
         _cache_put(pd.DataFrame(), _msgempty, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp, 60)
         return pd.DataFrame(), _msgempty, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
     _try_txt = " | ".join(_tried)

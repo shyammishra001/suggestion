@@ -3,8 +3,8 @@
 from findstock.helpers import *
 from findstock import diary as _diary_mod
 from findstock import ind_api as _ind_api_mod
-# V49 - Fresh session me keys hoti hi nahi - pehle default daal do, nahi to laptop wala KeyError/AttributeError aata hai
-for _k, _v in {"authenticated": False, "indmoney_secret": "", "indmoney_connected": False, "indmoney_debug": ""}.items():
+# V50 FIX - fresh session me keys pehle se set, warna line 8 pe KeyError
+for _k, _v in [("authenticated", False), ("indmoney_secret", ""), ("indmoney_connected", False)]:
     st.session_state.setdefault(_k, _v)
 _diary_mod._ensure_diary_csv()
 # ---------------- LOGIN ----------------

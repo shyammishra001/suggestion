@@ -155,7 +155,7 @@ def render():
                             _ind_msg += f" | IND Historical khali - Code {_sid3} - {_multi3.get('debug',[])}"
                     except Exception as e:
                         _ind_msg += f" | IND Candle Error - {e}"
-                    # STEP 3 - Option Chain sirf IND se - underlying-scrip = SECURITY_ID (bina prefix), exchange=NSE, segment=DERIVATIVE pehle, EQUITY fallback
+                    # STEP 3 - Option Chain sirf IND se - underlying-scrip = SECURITY_ID (bina prefix), exchange=NSE, segment=EQUITY (docs), scrip=Equity Master ka SECURITY_ID
                     try:
                         _ind_chain, _ind_chain_msg, _exp3, _scrip3, _ltp3 = ind_get_option_chain(_single_resolved, _tok3, _scrip_map3)
                         _ind_msg += f" | Option Chain IND se: {_ind_chain_msg}"

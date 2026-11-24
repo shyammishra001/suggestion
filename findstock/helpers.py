@@ -73,7 +73,7 @@ except:
 APP_DIR = Path(__file__).resolve().parent.parent  # V48 - helpers.py ab findstock/ folder me hai, isliye repo root = parent.parent (app.py wala folder)
 MASTER_FOLDER = "data"  # V33 - GitHub me sab master data ek hi folder me - bahar root me nahi. Diary alag hai, wo trades_diary me hi rahegi.
 
-APP_VERSION = 49  # V43 - Chain ki asli wajah + Fill datetime fix + AI branch fallback  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
+APP_VERSION = 50  # V43 - Chain ki asli wajah + Fill datetime fix + AI branch fallback  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
 def data_freshness_line():
     # Data taaza hai ya nahi - bas yehi dikhayenge, kahan se aaya ye nahi.
     # Taaza = Aaj ka Scan isi session me ho gaya, ya Universe file aaj ki hai. Nahi to - Download Data dabao.

@@ -216,6 +216,70 @@ def _news_theme_line(items):
     except:
         return ""
 
+def _github_models_token():
+    # V50 - GitHub Models token: Streamlit Secrets me GITHUB_MODELS_TOKEN naam se daalo (GitHub PAT, models:read permission).
+    # Token kabhi chat me mat likho, kabhi print mat karo.
+    try:
+        import streamlit as _st_t
+        for _k in ("GITHUB_MODELS_TOKEN", "GITHUB_TOKEN", "GH_MODELS_TOKEN"):
+            try:
+                _v = _st_t.secrets.get(_k, "") if hasattr(_st_t, "secrets") else ""
+            except:
+                _v = ""
+            if _v:
+                return str(_v).strip()
+    except:
+        pass
+    try:
+        import os
+        for _k in ("GITHUB_MODELS_TOKEN", "GITHUB_TOKEN", "GH_MODELS_TOKEN"):
+            if os.environ.get(_k):
+                return str(os.environ[_k]).strip()
+    except:
+        pass
+    return ""
+
+
+def _github_models_reply(question):
+    # V50 - Chatbot advance: GitHub Models (LLM) se jawab. Sirf apne data ke context ke saath, taaki LLM kahani na banaye.
+    # Token na ho ya API fail ho to None - caller rule-based chatbot pe gir jayega. Kabhi crash nahi.
+    try:
+        _tok = _github_models_token()
+        if not _tok:
+            return None
+        import requests as _rq_g
+        _ctx_parts = []
+        try:
+            import streamlit as _st3
+            _sdf3 = _st3.session_state.get("scan_df", None)
+            if _sdf3 is not None and not _sdf3.empty:
+                _ctx_parts.append("SCAN DATA (aaj ka scan):\n" + _sdf3.head(20).to_string(index=False)[:3000])
+        except:
+            pass
+        try:
+            _live3 = load_ai_live()
+            if _live3:
+                _ctx_parts.append("LIVE/MARKET NOTE:\n" + str(_live3)[:1500])
+        except:
+            pass
+        _ctx = "\n\n".join(_ctx_parts)[:4500]
+        _msgs = [{"role": "system", "content": "Tum ek Indian stock market (NSE/BSE, F&O) trading assistant ho. Hindi/Hinglish me jawab do, chhota aur number ke saath. Sirf diye gaye DATA se jawab do - data me jo nahi hai uspe 'pata nahi' bolo, kahani mat banao. Trading advice nahi, sirf data ki vyakhya."}]
+        if _ctx:
+            _msgs.append({"role": "system", "content": "DATA:\n" + _ctx})
+        _msgs.append({"role": "user", "content": str(question)})
+        _r = _rq_g.post("https://models.github.ai/inference/chat/completions",
+            headers={"Authorization": f"Bearer {_tok}", "Content-Type": "application/json", "Accept": "application/vnd.github+json"},
+            json={"model": "openai/gpt-4o-mini", "messages": _msgs, "temperature": 0.3, "max_tokens": 800},
+            timeout=20)
+        if _r.status_code != 200:
+            return None
+        _j = _r.json()
+        _txt = str((_j.get("choices") or [{}])[0].get("message", {}).get("content", "") or "").strip()
+        return _txt or None
+    except:
+        return None
+
+
 def ask_stock_ai(question):
     # V38 - AI Chat - ChatGPT jaisa, par sirf stock ke liye, aur sirf apne data se - banayi hui wajah nahi bolega
     # Kya batayega: Koi stock kyu bhaga / kyu gira - Gap, Volume, VWAP, ORB, News, Diary - sab number ke saath
@@ -225,6 +289,13 @@ def ask_stock_ai(question):
         _q = str(question or "").strip()
         if not _q:
             return "Sawaal likho - jaise 'RELIANCE kyu bhaga?' ya 'Market kyu gira?'"
+        # V50 - Pehle GitHub Models (LLM) se advanced jawab. Token na ho / API fail ho to neeche rule-based chalega.
+        try:
+            _gh = _github_models_reply(_q)
+            if _gh:
+                return _gh
+        except:
+            pass
         _qu = _q.upper()
         # 1) Stock dhoondho - sawaal me kaunsa stock hai
         _stock = ""
