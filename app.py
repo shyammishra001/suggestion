@@ -1,4 +1,4 @@
-# app.py - V44 - Scanner
+# app.py - V46 - Scanner
 # ============================================================================================
 import streamlit as st
 import pandas as pd
@@ -53,7 +53,7 @@ except:
 APP_DIR = Path(__file__).resolve().parent  # app.py jis folder me hai, wahi folder - bagal wali file yahin hai
 MASTER_FOLDER = "data"  # V33 - GitHub me sab master data ek hi folder me - bahar root me nahi. Diary alag hai, wo trades_diary me hi rahegi.
 
-APP_VERSION = 44  # V43 - Chain ki asli wajah + Fill datetime fix + AI branch fallback  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
+APP_VERSION = 46  # V43 - Chain ki asli wajah + Fill datetime fix + AI branch fallback  # V42 - Version sirf yahin se aayega - header + UI label dono yahin se, dobara V31 atakega nahi
 def data_freshness_line():
     # Data taaza hai ya nahi - bas yehi dikhayenge, kahan se aaya ye nahi.
     # Taaza = Aaj ka Scan isi session me ho gaya, ya Universe file aaj ki hai. Nahi to - Download Data dabao.
@@ -2348,21 +2348,50 @@ def _parse_option_chain_data(data):
     except Exception:
         return pd.DataFrame(), 0
 
+# V45 - 429 GUARD - ek baar Rate Limit laga to 90 sec tak API ko dobara mat chhedo, chahe kitni baar button dabao
+_IND_429_UNTIL = 0
+
 def ind_get_option_chain(symbol, token, scrip_map=None):
-    # V44 - DOCS WALA TARIKA, BILKUL JAISA DOCS ME LIKHA HAI (api-docs.indstocks.com/utility/ - Option Chain):
-    #   GET https://api.indstocks.com/market/option-chain
-    #   ?exchange=NSE&segment=EQUITY&underlying-scrip=2885&expiry=2026-08-25&strike_count=5
-    #   Header: Authorization: <token>   (Bearer NAHI)
-    # Docs ke 3 niyam:
-    #   1) segment sirf INDEX / EQUITY hota hai - DERIVATIVE is endpoint pe hota hi nahi.
-    #   2) underlying-scrip = EQUITY (cash) wala SECURITY_ID - FNO contract ka ID nahi.
-    #   3) expiry = YYYY-MM-DD, strike_count = ATM ke har taraf kitni strikes (default 10).
-    # V43 ki galti: EQUITY sirf count=25 ke saath try hota tha. Agar 25 reject hua to ek bhi
-    # poora-sahi combo kabhi bheja hi nahi gaya - isliye APLAPOLLO, TATASTEEL sab fail.
-    # Ab pehle docs wala combo (EQUITY + 10) jayega, phir EQUITY + 5, phir bina count, phir BSE.
-    # DERIVATIVE / bina-segment / 25 - ye teeno ab kabhi nahi bhejenge, kyunki docs me ye hai hi nahi.
+    # V45 - DOCS WALA TARIKA + 429 KA ILAAJ:
+    # Docs (api-docs.indstocks.com/utility/ - Option Chain):
+    #   GET /market/option-chain?exchange=NSE&segment=EQUITY&underlying-scrip=2885&expiry=2026-08-25&strike_count=5
+    #   Header: Authorization: <token> (Bearer NAHI)
+    #   segment = INDEX / EQUITY (UNDERLYING ka - underlying-scrip usi source se aayega),
+    #   underlying-scrip = EQUITY cash row ka SECURITY_ID (FNO contract ka ID nahi - docs ki common mistake),
+    #   strike_count = ATM ke HAR TARAF kitni strikes (default 10 -> 21 strikes),
+    #   strikes = strike price se keyed JSON OBJECT (array nahi).
+    #   Errors: 400 = galat exchange/segment/scrip/expiry (debug_info batayega),
+    #           429 = Rate limit exceeded - {"error": "Rate limit exceeded", "success": false}
+    # V44 ki galti (Photo 2 - 360 ONE WAM): 429 aaya to bhi saare combo try karte rahe,
+    # aur aakhri me jhooth bol diya "combo nahi mila". Asal me API ne rok lagayi thi.
+    # V45: 429 aate hi RUK JAO - saare loop band, 90 sec tak dobara call hi nahi.
+    # Aur 200 + khali strikes aaye to baki combo mat maaro - API ne samajh ke khali diya hai,
+    # usi expiry pe EQUITY+5 / BSE bhi khali hi dega, sirf rate limit khayega.
+    # Isliye max calls: success = 1, 200-khali = 2 (2 expiry x 1 combo), 429 = 1. V44 me 12 tak jaate the.
+    global _IND_429_UNTIL
     if not token or len(str(token).strip()) < 10:
         return pd.DataFrame(), "Login nahi hua", "", "", ""
+    _now = time.time()
+    if _now < _IND_429_UNTIL:
+        _wait = int(_IND_429_UNTIL - _now)
+        return pd.DataFrame(), f"Rate limit laga hua hai - {_wait} sec ruko, phir Chain Mango dabao. API ne zyada call pe rok lagayi hai, ye segment/expiry ki galti nahi hai.", "", "", ""
+    # Cache - 5 min me dobara Chain Mango dabaya to API ko mat chhedo, wahi chain dikhao
+    try:
+        import streamlit as _stc
+        _cc = _stc.session_state.get("_chain_cache", {}) or {}
+        _hit = _cc.get(str(symbol).upper())
+        if _hit and (_now - _hit.get("ts", 0) < _hit.get("ttl", 300)):
+            return _hit["df"], _hit["msg"], _hit["expiry"], _hit["scrip"], _hit["ltp"]
+    except:
+        pass
+    def _cache_put(_df, _msg, _expiry, _scrip, _ltp, _ttl):
+        try:
+            import streamlit as _stc2
+            _cc2 = _stc2.session_state.get("_chain_cache", {}) or {}
+            _cc2[str(symbol).upper()] = {"ts": time.time(), "ttl": _ttl, "df": _df, "msg": _msg, "expiry": _expiry, "scrip": _scrip, "ltp": _ltp}
+            _stc2.session_state["_chain_cache"] = _cc2
+        except:
+            pass
     expiries, err_exp = ind_get_expiries(symbol, token)
     if not expiries:
         expiries = [get_nearest_thursday_fallback()]
@@ -2395,9 +2424,17 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     _last_ltp = ""
     _last_raw = ""
     _last_api_msg = ""
+    _saw_429 = False
+    _saw_200_empty = False
     for _expiry in _try_expiries:
         for _base_params, _combo_name, _scount in _combos:
             try:
+                # Pehli call ke baad har call se pehle thoda ruko - API ko hammer mat karo
+                if _tried:
+                    try:
+                        time.sleep(0.6)
+                    except:
+                        pass
                 _params = dict(_base_params)
                 _params["underlying-scrip"] = scrip
                 _params["expiry"] = _expiry
@@ -2405,6 +2442,13 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
                     _params["strike_count"] = _scount
                 _tried.append(f"{_expiry} + {_combo_name}")
                 r = requests.get(f"{IND_BASE}/market/option-chain", headers=ind_headers(token), params=_params, timeout=15)
+                if r.status_code == 429:
+                    # V45 - 429 aaya to RUK JAO. Saare loop band, 90 sec tak koi chain call nahi.
+                    _IND_429_UNTIL = time.time() + 90
+                    _saw_429 = True
+                    _last_raw = f"Status 429 - {r.text[:300]}"
+                    _last_api_msg = "Rate limit exceeded"
+                    break
                 if r.status_code != 200:
                     _last_raw = f"Status {r.status_code} - {r.text[:300]}"
                     try:
@@ -2431,11 +2475,29 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
                     pass
                 _df_chain, _n = _parse_option_chain_data(data)
                 if _df_chain is not None and not _df_chain.empty and _n > 0:
-                    return _df_chain, f"IND SE AAYA - {_n} strikes - Expiry {_expiry} - {_combo_name} - Scrip {scrip} ({_src}) - LTP {_last_ltp}", _expiry, scrip, _last_ltp
-                continue
+                    _msg_ok = f"IND SE AAYA - {_n} strikes - Expiry {_expiry} - {_combo_name} - Scrip {scrip} ({_src}) - LTP {_last_ltp}"
+                    _cache_put(_df_chain, _msg_ok, _expiry, scrip, _last_ltp, 300)
+                    return _df_chain, _msg_ok, _expiry, scrip, _last_ltp
+                # 200 + khali - API ne samajh ke khali diya, isi expiry ke baki combo bekaar hain
+                _saw_200_empty = True
+                break
             except Exception as _e_combo:
                 _last_raw = f"Combo error - {_e_combo}"
                 continue
+        if _saw_429:
+            break
+        # 200-khali ke baad sirf ek aur expiry try karo, usse zyada nahi - har expiry pe hammering nahi
+        if _saw_200_empty and _expiry != _try_expiries[0]:
+            break
+    # Failure - teen alag wajah, teen alag sach. Jhootha "combo nahi mila" kabhi nahi bolenge.
+    if _saw_429:
+        _msg429 = f"API ne Rate Limit laga diya (429) - {_last_raw[:200]} - 1-2 minute ruko, phir Chain Mango dabao. Ye segment/expiry ki galti nahi hai, API ne zyada call pe rok lagayi hai. Bar-bar dabane se limit aur badhegi."
+        _cache_put(pd.DataFrame(), _msg429, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp, 60)
+        return pd.DataFrame(), _msg429, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
+    if _saw_200_empty:
+        _msgempty = f"Chain khali aayi - Sab try kiya: {' | '.join(_tried)} - LTP {_last_ltp} - API ne 200 de ke khali strikes diye, matlab is expiry pe is stock ke options nahi hain ya chain bani hi nahi. Agli expiry try karo ya thodi der baad dobara try karo."
+        _cache_put(pd.DataFrame(), _msgempty, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp, 60)
+        return pd.DataFrame(), _msgempty, str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
     _try_txt = " | ".join(_tried)
     _api_part = f" - API ne bola: {_last_api_msg}" if _last_api_msg else ""
     return pd.DataFrame(), f"IND se strikes khali aaye - Scrip {scrip} ({_src}) - Sab try kiya: {_try_txt} - LTP {_last_ltp}{_api_part} - Aakhri jawab: {_last_raw[:500]} - Expiry / Segment ka combo nahi mila. Agli Expiry ya thodi der baad dobara try karo.", str(_try_expiries[0]) if _try_expiries else "", scrip, _last_ltp
@@ -4710,7 +4772,23 @@ if _single_resolved:
                     _ind_msg += f" | Option: {_ind_chain_msg}"
             else:
                 _ind_msg = f"IND Scrip nahi mila - {_src3} - GitHub CSV me iska Sahi Naam check karo - Pehle Download Data dabao"
-            st.session_state["single_result"] = {"stock": _single_resolved, "ind_ana": _ind_ana, "ind_msg": _ind_msg, "ind_chain": _ind_chain, "ind_chain_msg": _ind_chain_msg, "ind_quote": _ind_quote, "ind_quote_msg": _ind_quote_msg, "best_ana": _ind_ana, "scrip_code": _scrip_code3, "security_id": _sid3, "expiry": locals().get("_exp3", "")}
+            # V46 - DeepSeek wali SAHI baat: Candle (Historical) fail hui to bhi Gap% quote se bhar do.
+            # Quote me day_open + previous_close hota hai, isliye gap_pct = (open-prev_close)/prev_close*100 nikal sakta hai.
+            # VWAP quote se NAHI aa sakta (uske liye candle chahiye - app pehle se candle se nikalta hai, Typical Price wala).
+            # Volume pehle se quote se aa raha tha (Photo 3 me 5687870 dikha tha) - usme koi kami nahi thi.
+            try:
+                _q_open3 = safe_float((_ind_quote or {}).get("open", 0))
+                _q_prev3 = safe_float((_ind_quote or {}).get("prev_close", 0))
+                _gap_quote3 = round((_q_open3 - _q_prev3) / _q_prev3 * 100, 2) if _q_prev3 else 0.0
+            except:
+                _gap_quote3 = 0.0
+            try:
+                _ana3_now = _ind_ana if "_ind_ana" in locals() else None
+                if (not _ana3_now or "error" in (_ana3_now or {})) and _gap_quote3 != 0:
+                    _ind_msg += f" | Gap% quote se bhar diya - {_gap_quote3}% (Candle nahi aayi, isliye VWAP / Vol x 0 hain)"
+            except:
+                pass
+            st.session_state["single_result"] = {"stock": _single_resolved, "ind_ana": _ind_ana, "ind_msg": _ind_msg, "ind_chain": _ind_chain, "ind_chain_msg": _ind_chain_msg, "ind_quote": _ind_quote, "ind_quote_msg": _ind_quote_msg, "best_ana": _ind_ana, "scrip_code": _scrip_code3, "security_id": _sid3, "expiry": locals().get("_exp3", ""), "gap_quote": _gap_quote3}
             # V26 - Single Check ka bhi Candle Cache me jama kar do - taaki SCAN me is stock ka Delta hi mangna pade
             try:
                 if _ind_ana is not None and "error" not in _ind_ana:
@@ -4732,7 +4810,7 @@ if st.session_state.get("single_result"):
     _ind_rows = [
         {"Cheez": "LTP", "Value": safe_float(_iQ.get("ltp",0)) if _iQ else safe_float(_iA.get("LTP",0)) if _iA else 0},
         {"Cheez": "Change %", "Value": safe_float(_iQ.get("change_pct",0)) if _iQ else safe_float(_iA.get("Gap %",0)) if _iA else 0},
-        {"Cheez": "Gap %", "Value": safe_float(_iA.get("Gap %",0)) if _iA else 0},
+        {"Cheez": "Gap %", "Value": safe_float(_iA.get("Gap %",0)) if _iA and safe_float(_iA.get("Gap %",0)) != 0 else safe_float(_sr.get("gap_quote",0))},
         {"Cheez": "VWAP", "Value": safe_float(_iA.get("VWAP",0)) if _iA else 0},
         {"Cheez": "Day High", "Value": safe_float(_iQ.get("high",0)) if _iQ else safe_float(_iA.get("Day High",0)) if _iA else 0},
         {"Cheez": "Day Low", "Value": safe_float(_iQ.get("low",0)) if _iQ else safe_float(_iA.get("Day Low",0)) if _iA else 0},
@@ -4751,14 +4829,15 @@ if st.session_state.get("single_result"):
         st.write(f"{_pass_n}/4 Pass")
         st.write(f"**Movement:** {_best.get('Movement Type','')} - {_best.get('Movement Detail','')} | **Session:** {_best.get('Session Story','')} | **Fake?** {'HAAN - TRAP' if _best.get('Fake Breakout') else 'NAHI'}")
     else:
-        st.warning("Data nahi aaya")
+        st.warning("Data nahi aaya - Candle (Historical) nahi aaya, isliye Gap / VWAP / Volume x 0 hain")
+        st.write(f"Wajah: {_sr.get('ind_msg','')}")
     # V23 - Single ka Option Chain - sirf INDmoney se - NSE se nahi mangte
     _ind_ch_s = _sr.get("ind_chain", pd.DataFrame())
     if _ind_ch_s is not None and not _ind_ch_s.empty:
         st.write("Chain:")
         st.dataframe(_ind_ch_s.head(15), use_container_width=True, hide_index=True)
     else:
-        st.write("Chain nahi aaya")
+        st.write(f"Chain nahi aaya - Wajah: {_sr.get('ind_chain_msg','')}")
     # V28 - SINGLE ka bhi FINAL CALL - wahi build_trade_call, taaki Single me bhi Entry/SL/Target mile, sirf chain ke 15 row nahi
     try:
         _s_ana = _sr.get("best_ana") or {}
@@ -4788,7 +4867,10 @@ if st.session_state.get("single_result"):
                 _s_sugg = {"date": datetime.now().strftime("%Y-%m-%d"), "time": datetime.now().strftime("%H:%M:%S"), "symbol": _s_call['stock'], "strike": _s_call['strike'], "opt_type": _s_call['opt_type'], "entry": float(_s_call['entry']), "sl": float(_s_call['sl']), "target": float(_s_call['target']), "qty_lots": 1, "qty_total": int(_s_call['lot']), "capital_used": float(_s_call['cost']), "risk": float(_s_call['max_loss']), "status": "OPEN", "reason": f"Single Search - Prob {_s_call['prob']:.0f} - {_s_call['movement_type']}", "conditions": _s_call.get('rule_line','')}
                 if st.button("Telegram", use_container_width=True, key="single_call_notify"):
                     _ok_s = send_strike(_s_call['stock'], _s_call['strike'], _s_call['opt_type'], _s_call['entry'], _s_call['sl'], _s_call['target'], _s_call['cost'], _s_call['lot'], _s_call['expiry'], str(_s_call['movement_type']))
-                    st.success("Chala gaya ✅") if _ok_s else st.error("Nahi gaya ❌")
+                    if _ok_s:
+                        st.success("Chala gaya ✅")
+                    else:
+                        st.error("Nahi gaya ❌")
                 if st.button(f"{_stk} ko Diary me Save Karo", use_container_width=True, key="single_call_diary"):
                     save_trade(_s_sugg); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
             else:
@@ -5159,7 +5241,10 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         with _c1:
             if st.button("Telegram", use_container_width=True, key="final_call_notify"):
                 _ok_fc = send_strike(_final_call['stock'], _final_call['strike'], _final_call['opt_type'], _final_call['entry'], _final_call['sl'], _final_call['target'], _final_call['cost'], _final_call['lot'], _final_call['expiry'], str(_final_call['movement_type']))
-                st.success("Chala gaya ✅") if _ok_fc else st.error("Nahi gaya ❌")
+                if _ok_fc:
+                    st.success("Chala gaya ✅")
+                else:
+                    st.error("Nahi gaya ❌")
         with _c2:
             if st.button("Diary", use_container_width=True, key="final_call_diary"):
                 save_trade(_fc_sugg); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
@@ -5178,7 +5263,10 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         with _c1b:
             if st.button("Telegram", use_container_width=True, key="best_effort_notify"):
                 _ok_be = send_strike(_final_call['stock'], _final_call['strike'], _final_call['opt_type'], _final_call['entry'], _final_call['sl'], _final_call['target'], _final_call['cost'], _final_call['lot'], _final_call['expiry'], str(_final_call['movement_type']))
-                st.success("Chala gaya ✅") if _ok_be else st.error("Nahi gaya ❌")
+                if _ok_be:
+                    st.success("Chala gaya ✅")
+                else:
+                    st.error("Nahi gaya ❌")
         with _c2b:
             if st.button("Diary", use_container_width=True, key="best_effort_diary"):
                 save_trade(_fc_sugg2); st.success(st.session_state.get("_diary_last_msg","Diary me save ho gaya!")); st.rerun()
@@ -5202,14 +5290,20 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             st.rerun()
         if st.button("Telegram - Top 5", use_container_width=True, key="nochain_telegram"):
             _ok_nc = send_top5(df_scan.head(5), "")
-            st.success("Chala gaya ✅") if _ok_nc else st.error("Nahi gaya ❌")
+            if _ok_nc:
+                st.success("Chala gaya ✅")
+            else:
+                st.error("Nahi gaya ❌")
     elif _final_call and _final_call.get("status") == "NO_FIT":
         st.warning(f"Rule pass hai - {_final_call.get('stock','')} - Prob {_final_call.get('prob',0):.0f}/100 - par Rs 5000 wala strike nahi mila")
         st.write(f"Wajah: {_final_call.get('reason','')}")
         st.write(f"Movement: {_final_call.get('movement_type','')} - {_final_call.get('movement_detail','')}")
         if st.button("Telegram - Top 5", use_container_width=True, key="nofit_telegram"):
             _ok_nf = send_top5(df_scan.head(5), "")
-            st.success("Chala gaya ✅") if _ok_nf else st.error("Nahi gaya ❌")
+            if _ok_nf:
+                st.success("Chala gaya ✅")
+            else:
+                st.error("Nahi gaya ❌")
     else:
         _nt_stock = _final_call.get('stock','') if _final_call else ""
         _nt_prob = _final_call.get('prob',0) if _final_call else 0
@@ -5220,7 +5314,10 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
         st.write("Top 5 neeche dekh lo - koi 50+ wala ho to usko Single Search me alag se check karo, par jab tak Movement suru nahi hota, entry mat lo.")
         if st.button("Telegram - Top 5", use_container_width=True, key="notrade_telegram"):
             _ok_nt = send_top5(df_scan.head(5), "")
-            st.success("Chala gaya ✅") if _ok_nt else st.error("Nahi gaya ❌")
+            if _ok_nt:
+                st.success("Chala gaya ✅")
+            else:
+                st.error("Nahi gaya ❌")
 
     # 3-STEP DEBUG - Har step me kitne aaye, kyu fail hua, sab dikhao - chhupao mat
     _dbg1 = st.session_state.get("step1_debug", {})
@@ -5441,7 +5538,10 @@ if st.session_state.scan_df is not None and not st.session_state.scan_df.empty:
             _chain_msg_show = st.session_state.get(f'chain_source_{sel_stock}','')
             st.error(f"❌ Option Chain nahi aaya - Wajah: {_chain_msg_show}")
             st.write("")
-            st.write("Dobara try karo, ya Download Data se Master FNO dobara lo.")
+            if "Rate limit" in _chain_msg_show:
+                st.write("1-2 minute ruko, phir Chain Mango dabao - bar-bar dabane se limit aur badhegi.")
+            else:
+                st.write("Dobara try karo, ya Download Data se Master FNO dobara lo.")
         else:
             st.info("Chain Mango dabao")
 else:
@@ -5463,4 +5563,7 @@ else:
             st.write(f"Saved se bhi nahi mila: {_dbg_e.get('fallback_msg')}")
         if st.button("Telegram", use_container_width=True, key="empty_telegram"):
             _ok_t = send_telegram("Scan khali aaya - koi stock nahi mila. Dobara Scan dabao.")
-            st.success("Chala gaya ✅") if _ok_t else st.error("Nahi gaya ❌")
+            if _ok_t:
+                st.success("Chala gaya ✅")
+            else:
+                st.error("Nahi gaya ❌")
