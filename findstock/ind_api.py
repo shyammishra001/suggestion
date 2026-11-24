@@ -1105,9 +1105,10 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     # V44 ki galti (Photo 2 - 360 ONE WAM): 429 aaya to bhi saare combo try karte rahe,
     # aur aakhri me jhooth bol diya "combo nahi mila". Asal me API ne rok lagayi thi.
     # V45: 429 aate hi RUK JAO - saare loop band, 90 sec tak dobara call hi nahi.
-    # Aur 200 + khali strikes aaye to baki combo mat maaro - API ne samajh ke khali diya hai,
-    # usi expiry pe EQUITY+5 / BSE bhi khali hi dega, sirf rate limit khayega.
-    # Isliye max calls: success = 1, 200-khali = 2 (2 expiry x 1 combo), 429 = 1. V44 me 12 tak jaate the.
+    # V49 (APL Apollo photo): 200 + khali pe sirf COUNT wale combo bekaar hain (count se chain ka hona nahi badalta),
+    # isliye count wale combos hataye. SEGMENT alag baat hai - DERIVATIVE khali ho to EQUITY try karna banta hai,
+    # kyunki Expiries endpoint DERIVATIVE se kaam karta hai aur chain EQUITY se khali aati hai.
+    # Isliye max calls: success = 1, 200-khali = 12 (4 expiry x 3 segment) - par aam taur pe DERIVATIVE pehli call me hi chain mil jayegi.
     if not token or len(str(token).strip()) < 10:
         return pd.DataFrame(), "Login nahi hua", "", "", ""
     _now = time.time()
@@ -1166,13 +1167,19 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     _sym_u = str(symbol).upper()
     _is_index = any(_k in _sym_u for _k in ["NIFTY", "SENSEX", "BANKEX", "FINNIFTY", "MIDCAP"]) or _sym_u in ["NIFTY 50", "NIFTY BANK", "BANK NIFTY"]
     _seg = "INDEX" if _is_index else "EQUITY"
-    # Sirf docs wale combos - pehla wala hi docs ka example hai
-    _combos = [
-        ({"exchange": "NSE", "segment": _seg}, f"NSE + {_seg} + count=10", 10),
-        ({"exchange": "NSE", "segment": _seg}, f"NSE + {_seg} + count=5", 5),
-        ({"exchange": "NSE", "segment": _seg}, f"NSE + {_seg} + bina count", None),
-        ({"exchange": "BSE", "segment": _seg}, f"BSE + {_seg} + count=10", 10),
-    ]
+    # V49 - DERIVATIVE pehle, EQUITY fallback. Docs me EQUITY likha hai, par live API APL Apollo jaise
+    # stocks pe EQUITY se 200-empty deti hai - isliye DERIVATIVE pehle try karte hain.
+    if _is_index:
+        _combos = [
+            ({"exchange": "NSE", "segment": "INDEX"}, "NSE + INDEX + count=10", 10),
+            ({"exchange": "NSE", "segment": "DERIVATIVE"}, "NSE + DERIVATIVE + count=10", 10),
+        ]
+    else:
+        _combos = [
+            ({"exchange": "NSE", "segment": "DERIVATIVE"}, "NSE + DERIVATIVE + count=10", 10),
+            ({"exchange": "NSE", "segment": "EQUITY"}, "NSE + EQUITY + count=10", 10),
+            ({"exchange": "BSE", "segment": "EQUITY"}, "BSE + EQUITY + count=10", 10),
+        ]
     _tried = []
     _last_ltp = ""
     _last_raw = ""
@@ -1180,7 +1187,7 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
     _saw_429 = False
     _saw_200_empty = False
     for _expiry in _try_expiries:
-        for _base_params, _combo_name, _scount in _combos:
+        for _ci, (_base_params, _combo_name, _scount) in enumerate(_combos):
             try:
                 # Pehli call ke baad har call se pehle thoda ruko - API ko hammer mat karo
                 if _tried:
@@ -1231,8 +1238,11 @@ def ind_get_option_chain(symbol, token, scrip_map=None):
                     _msg_ok = f"IND SE AAYA - {_n} strikes - Expiry {_expiry} - {_combo_name} - Scrip {scrip} ({_src}) - LTP {_last_ltp}"
                     _cache_put(_df_chain, _msg_ok, _expiry, scrip, _last_ltp, 300)
                     return _df_chain, _msg_ok, _expiry, scrip, _last_ltp
-                # 200 + khali - API ne samajh ke khali diya, isi expiry ke baki combo bekaar hain
+                # 200 + khali - is SEGMENT pe khali hai. Agla SEGMENT try karo (DERIVATIVE khali ho to EQUITY).
+                # Saare segment khali ho gaye to hi agli expiry pe jao.
                 _saw_200_empty = True
+                if _ci < len(_combos) - 1:
+                    continue
                 break
             except Exception as _e_combo:
                 _last_raw = f"Combo error - {_e_combo}"

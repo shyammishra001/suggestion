@@ -18,7 +18,7 @@ except:
     IST = timezone(timedelta(hours=5, minutes=30))
 
 from findstock.helpers import *
-from findstock.data import get_scan_universe_216, load_history_cache_from_github, load_tf_month, save_tf_month, tf_candles_for_stock, tf_yyyymm
+from findstock.data import get_scan_universe_216, load_history_cache_from_github, load_tf_month, save_tf_month, tf_candles_for_stock, tf_yyyymm, FULL_NAME_ALIASES
 from findstock.helpers import KNOWN_SCRIP, MARKET_STOCKS, get_scan_window, get_trading_day, is_market_closed_for_scan, ist_now, safe_float, safe_int, to_ms
 from findstock.ind_api import ind_candles_to_df, ind_get_all_scrips, ind_get_historical_batch, ind_get_scrip, ind_historical_5x5_with_retry, ind_quotes_full_docs_pattern
 

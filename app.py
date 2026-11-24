@@ -3,6 +3,9 @@
 from findstock.helpers import *
 from findstock import diary as _diary_mod
 from findstock import ind_api as _ind_api_mod
+# V49 - Fresh session me keys hoti hi nahi - pehle default daal do, nahi to laptop wala KeyError/AttributeError aata hai
+for _k, _v in {"authenticated": False, "indmoney_secret": "", "indmoney_connected": False, "indmoney_debug": ""}.items():
+    st.session_state.setdefault(_k, _v)
 _diary_mod._ensure_diary_csv()
 # ---------------- LOGIN ----------------
 if not st.session_state.authenticated:
@@ -43,13 +46,13 @@ except Exception:
 st.sidebar.title("Menu")
 _choice = st.sidebar.radio("Option", ["Scan", "Diary", "Download Data", "AI Chat"], key="main_menu_choice")
 if _choice == "Scan":
-    from pages import page_scan as _pg
+    from views import page_scan as _pg
 elif _choice == "Diary":
-    from pages import page_diary as _pg
+    from views import page_diary as _pg
 elif _choice == "Download Data":
-    from pages import page_download as _pg
+    from views import page_download as _pg
 else:
-    from pages import page_ai as _pg
+    from views import page_ai as _pg
 _pg.render()
 if st.sidebar.button("Refresh Data"):
     st.cache_data.clear(); st.rerun()
